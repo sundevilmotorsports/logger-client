@@ -1,0 +1,10 @@
+[package]
+name = "logger-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+pathfinder_color = "0.5.0"
+rust-embed = "8.11.0"
+warpui = { git = "https://github.com/warpdotdev/warp", package = "warpui" }
