@@ -1,57 +1,58 @@
-use std::time::Duration;
-
 use pathfinder_color::ColorU;
 use warpui::{
     elements::{
-        ConstrainedBox, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex,
-        MainAxisAlignment, ParentElement, Rect, Stack, Text,
+        ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex,
+        Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement, Rect, Stack, Text,
     },
     fonts::FamilyId,
+    platform::Cursor,
     AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
-use warpui::r#async::Timer;
 
-use crate::device::{self, Command, Connection, Response};
+use crate::device::{self, DeviceState};
 
 const BG: ColorU = ColorU { r: 13, g: 13, b: 15, a: 255 };
+const BG2: ColorU = ColorU { r: 25, g: 25, b: 30, a: 255 };
 const FG: ColorU = ColorU { r: 200, g: 200, b: 210, a: 255 };
 const MUTED: ColorU = ColorU { r: 80, g: 80, b: 95, a: 255 };
 const GREEN: ColorU = ColorU { r: 80, g: 200, b: 120, a: 255 };
 const AMBER: ColorU = ColorU { r: 200, g: 160, b: 60, a: 255 };
+const RED: ColorU = ColorU { r: 200, g: 80, b: 80, a: 255 };
 
 const FONT_SIZE: f32 = 13.;
 const LABEL_COL: usize = 10;
 
-fn text(s: impl Into<String>, font: FamilyId, color: ColorU) -> Box<dyn Element> {
-    Text::new_inline(s.into(), font, FONT_SIZE).with_color(color).finish()
-}
-
-fn info_row(
-    label: &str,
-    value: impl Into<String>,
-    font: FamilyId,
-    value_color: ColorU,
-) -> Box<dyn Element> {
-    let padded = format!("{:<width$}", label, width = LABEL_COL);
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_alignment(MainAxisAlignment::Start)
-        .with_child(text(padded, font, MUTED))
-        .with_child(text(value, font, value_color))
-        .finish()
+fn subscribe<V, S>(
+    ctx: &mut ViewContext<V>,
+    mut rx: tokio::sync::watch::Receiver<S>,
+    update: impl Fn(&mut V, &mut ViewContext<V>, S) + Send + Clone + 'static,
+) where
+    V: View + TypedActionView + Entity + 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    let spawner = ctx.spawner();
+    ctx.spawn(
+        async move {
+            while rx.changed().await.is_ok() {
+                let s = rx.borrow().clone();
+                let f = update.clone();
+                spawner.spawn(move |view, ctx| f(view, ctx, s)).await.ok();
+            }
+        },
+        |_, _, _| {},
+    );
 }
 
 fn format_uptime(secs: u64) -> String {
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 { format!("{}:{:02}:{:02}", h, m, s) } else { format!("{}:{:02}", m, s) }
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
 }
 
 pub struct RootView {
-    port: Option<String>,
-    uptime: Option<u64>,
+    state: DeviceState,
     font: FamilyId,
+    req_tx: device::RequestTx,
+    ping_hover: MouseStateHandle,
 }
 
 impl RootView {
@@ -66,93 +67,32 @@ impl RootView {
                 .expect("no monospace font found")
         });
 
-        let spawner = ctx.spawner();
-        ctx.spawn(
-            async move {
-                loop {
-                    let Some(port_name) = device::find_port() else {
-                        let _ = spawner
-                            .spawn(|view: &mut RootView, ctx| {
-                                view.port = None;
-                                view.uptime = None;
-                                let wid = ctx.window_id();
-                                ctx.windows().set_window_title(wid, "logger-client");
-                                ctx.notify();
-                            })
-                            .await;
-                        Timer::after(Duration::from_secs(3)).await;
-                        continue;
-                    };
+        let (tx, rx) = tokio::sync::watch::channel(DeviceState::default());
+        let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn(move || device::poll(tx, req_rx));
+        subscribe(ctx, rx, Self::on_device_state);
 
-                    let port_for_open = port_name.clone();
-                    let maybe_conn = tokio::task::spawn_blocking(move || {
-                        let mut conn = Connection::open(&port_for_open).ok()?;
-                        matches!(conn.request(Command::Ping), Ok(Response::Pong))
-                            .then_some(conn)
-                    })
-                    .await
-                    .ok()
-                    .flatten();
+        Self { state: DeviceState::default(), font, req_tx, ping_hover: Default::default() }
+    }
 
-                    let Some(conn) = maybe_conn else {
-                        Timer::after(Duration::from_secs(1)).await;
-                        continue;
-                    };
+    fn on_device_state(&mut self, ctx: &mut ViewContext<Self>, state: DeviceState) {
+        let title = state.port.as_deref()
+            .map(|p| format!("● {p}"))
+            .unwrap_or_else(|| "logger-client".to_string());
+        let wid = ctx.window_id();
+        ctx.windows().set_window_title(wid, &title);
+        self.state = state;
+        ctx.notify();
+    }
 
-                    let title = port_name.clone();
-                    if spawner
-                        .spawn(move |view: &mut RootView, ctx| {
-                            view.port = Some(title.clone());
-                            view.uptime = None;
-                            let wid = ctx.window_id();
-                            ctx.windows().set_window_title(wid, &format!("● {title}"));
-                            ctx.notify();
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-
-                    let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(4);
-                    std::thread::spawn(move || {
-                        let mut conn = conn;
-                        loop {
-                            match conn.request(Command::Uptime) {
-                                Ok(Response::Uptime { uptime_seconds }) => {
-                                    if tx.blocking_send(uptime_seconds).is_err() {
-                                        break;
-                                    }
-                                }
-                                other => {
-                                    log::warn!("uptime: {other:?}");
-                                    break;
-                                }
-                            }
-                            std::thread::sleep(Duration::from_secs(1));
-                        }
-                    });
-
-                    while let Some(uptime) = rx.recv().await {
-                        if spawner
-                            .spawn(move |view: &mut RootView, ctx| {
-                                view.uptime = Some(uptime);
-                                ctx.notify();
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-
-                    Timer::after(Duration::from_secs(1)).await;
-                }
-            },
-            |_, _, _| {},
-        );
-
-        Self { port: None, uptime: None, font }
+    fn row(&self, label: &str, value: &str, color: ColorU) -> Box<dyn Element> {
+        let padded = format!("{label:<LABEL_COL$}");
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_child(Text::new_inline(padded, self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(Text::new_inline(value.to_string(), self.font, FONT_SIZE).with_color(color).finish())
+            .finish()
     }
 }
 
@@ -161,36 +101,60 @@ impl Entity for RootView {
 }
 
 impl View for RootView {
-    fn ui_name() -> &'static str {
-        "RootView"
-    }
+    fn ui_name() -> &'static str { "RootView" }
 
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
-        let (status_str, status_color) = match &self.port {
+        let (status, status_color) = match &self.state.port {
             Some(_) => ("connected", GREEN),
             None => ("scanning...", AMBER),
         };
-        let port_str = self.port.clone().unwrap_or_else(|| "—".to_string());
-        let uptime_str =
-            self.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
+        let port = self.state.port.as_deref().unwrap_or("—");
+        let uptime = self.state.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
+        let (ping_str, ping_color) = match self.state.last_ping {
+            Some(true) => ("ok", GREEN),
+            Some(false) => ("error", RED),
+            None => ("—", MUTED),
+        };
+
+        let req_tx = self.req_tx.clone();
+        let font = self.font;
+        let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
+            let bg = if ms.is_hovered() { MUTED } else { BG2 };
+            Stack::new()
+                .with_child(Rect::new().with_background_color(bg).finish())
+                .with_child(Container::new(
+                    Text::new_inline("ping", font, FONT_SIZE).with_color(FG).finish(),
+                ).with_uniform_padding(4.).finish())
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |_, _, _| { let _ = req_tx.send(device::Command::Ping); })
+        .finish();
 
         let content = Flex::column()
             .with_spacing(4.)
-            .with_child(text("logger-client", self.font, MUTED))
-            .with_child(text("", self.font, MUTED))
-            .with_child(info_row("status", status_str, self.font, status_color))
-            .with_child(info_row("port", port_str, self.font, FG))
-            .with_child(info_row("uptime", uptime_str, self.font, FG))
+            .with_child(Text::new_inline("logger-client", self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(Text::new_inline("", self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(self.row("status", status, status_color))
+            .with_child(self.row("port", port, FG))
+            .with_child(self.row("uptime", &uptime, FG))
+            .with_child(Text::new_inline("", self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(8.)
+                    .with_child(ping_btn)
+                    .with_child(Text::new_inline(ping_str, self.font, FONT_SIZE).with_color(ping_color).finish())
+                    .finish(),
+            )
             .finish();
 
         let ui = Stack::new()
             .with_child(Rect::new().with_background_color(BG).finish())
             .with_child(
-                warpui::elements::Container::new(
-                    ConstrainedBox::new(content).with_max_width(400.).finish(),
-                )
-                .with_uniform_padding(32.)
-                .finish(),
+                Container::new(ConstrainedBox::new(content).with_max_width(400.).finish())
+                    .with_uniform_padding(32.)
+                    .finish(),
             )
             .finish();
 
