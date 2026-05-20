@@ -1,11 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::borrow::Cow;
 pub mod device;
 pub mod root_view;
 
 extern crate warpui;
 use rust_embed::RustEmbed;
-use warpui::{platform, AssetProvider};
+use warpui::{AssetProvider, platform};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "assets"]
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
         on_should_terminate_app: Some(Box::new(|_| std::process::exit(0))),
         ..Default::default()
     };
-    
+
     let app_builder = platform::AppBuilder::new(callbacks, Box::new(ASSETS), None);
     let _ = app_builder.run(move |ctx| {
         ctx.add_window(
