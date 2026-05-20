@@ -12,7 +12,6 @@ use warpui::{
 use crate::device::{self, DeviceState};
 
 const BG: ColorU = ColorU { r: 13, g: 13, b: 15, a: 255 };
-const BG2: ColorU = ColorU { r: 25, g: 25, b: 30, a: 255 };
 const FG: ColorU = ColorU { r: 200, g: 200, b: 210, a: 255 };
 const MUTED: ColorU = ColorU { r: 80, g: 80, b: 95, a: 255 };
 const GREEN: ColorU = ColorU { r: 80, g: 200, b: 120, a: 255 };
@@ -119,13 +118,8 @@ impl View for RootView {
         let req_tx = self.req_tx.clone();
         let font = self.font;
         let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
-            let bg = if ms.is_hovered() { MUTED } else { BG2 };
-            Stack::new()
-                .with_child(Rect::new().with_background_color(bg).finish())
-                .with_child(Container::new(
-                    Text::new_inline("ping", font, FONT_SIZE).with_color(FG).finish(),
-                ).with_uniform_padding(4.).finish())
-                .finish()
+            let color = if ms.is_hovered() { FG } else { MUTED };
+            Text::new_inline("[ ping ]", font, FONT_SIZE).with_color(color).finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |_, _, _| { let _ = req_tx.send(device::Command::Ping); })
