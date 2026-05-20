@@ -23,8 +23,13 @@ impl AssetProvider for Assets {
 }
 
 fn main() -> Result<()> {
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let callbacks = platform::AppCallbacks {
+        on_should_close_window: Some(Box::new(|_, _| std::process::exit(0))),
+        on_should_terminate_app: Some(Box::new(|_| std::process::exit(0))),
+        ..Default::default()
+    };
+    
+    let app_builder = platform::AppBuilder::new(callbacks, Box::new(ASSETS), None);
     let _ = app_builder.run(move |ctx| {
         ctx.add_window(
             warpui::AddWindowOptions::default(),

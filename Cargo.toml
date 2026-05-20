@@ -7,4 +7,5 @@ edition = "2024"
 anyhow = "1.0.102"
 pathfinder_color = "0.5.0"
 rust-embed = "8.11.0"
+serialport = "4"
 warpui = { git = "https://github.com/warpdotdev/warp", package = "warpui" }
