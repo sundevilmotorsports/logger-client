@@ -2,24 +2,27 @@ use std::io::{BufRead, BufReader, Write};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
+    Ping,
+    Status,
+    GetConfig,
+    SetConfig { args: serde_json::Value },
+    Frames,
     Uptime,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct StatusResponse {
-    pub uptime_seconds: u64,
-}
-
-pub fn find_port() -> Option<String> {
-    serialport::available_ports().ok()?.into_iter().find_map(|p| match p.port_type {
-        serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
-        _ => None,
-    })
+#[derive(Debug)]
+pub enum Response {
+    Pong,
+    Status { config_loaded: bool },
+    Config(serde_json::Value),
+    SetConfigOk,
+    Frames(Vec<serde_json::Value>),
+    Uptime { uptime_seconds: u64 },
 }
 
 pub struct Connection {
@@ -31,19 +34,15 @@ impl Connection {
         let mut port = serialport::new(port_name, 115200)
             .timeout(Duration::from_millis(1000))
             .open()?;
-        // Disable DTR/RTS to avoid triggering ESP32 auto-reset on port open
         let _ = port.write_data_terminal_ready(false);
         let _ = port.write_request_to_send(false);
         port.clear(serialport::ClearBuffer::Input).ok();
         Ok(Self { port })
     }
 
-    pub fn request<R>(&mut self, cmd: &Command) -> anyhow::Result<R>
-    where
-        R: for<'de> Deserialize<'de>,
-    {
-        let payload = serde_json::to_string(cmd)? + "\n";
-        self.port.write_all(payload.as_bytes())?;
+    pub fn request(&mut self, cmd: Command) -> anyhow::Result<Response> {
+        let json = serde_json::to_string(&cmd)? + "\n";
+        self.port.write_all(json.as_bytes())?;
         self.port.flush()?;
 
         let mut buf = Vec::new();
@@ -53,45 +52,35 @@ impl Connection {
         let raw = raw.trim();
         log::debug!("device → {raw}");
 
-        let v: serde_json::Value = serde_json::from_str(raw)
+        let envelope: serde_json::Value = serde_json::from_str(raw)
             .map_err(|e| anyhow!("bad JSON ({e}): {raw}"))?;
 
-        // Firmware envelope: {"ok": true, "data": {...}} | {"ok": false, "error": "..."}
-        match v.get("ok").and_then(|b| b.as_bool()) {
-            Some(true) => {
-                let data = v.get("data").cloned().unwrap_or(serde_json::Value::Null);
-                Ok(serde_json::from_value(data)?)
-            }
-            Some(false) => {
-                let msg = v["error"].as_str().unwrap_or("unknown error");
-                Err(anyhow!("device error: {msg}"))
-            }
-            None => Ok(serde_json::from_value(v)?), // bare JSON fallback
+        if envelope["ok"].as_bool() != Some(true) {
+            let msg = envelope["error"].as_str().unwrap_or("unknown error");
+            return Err(anyhow!("device error: {msg}"));
         }
+        let data = envelope["data"].clone();
+
+        Ok(match cmd {
+            Command::Ping => Response::Pong,
+            Command::Status => Response::Status {
+                config_loaded: data["config_loaded"].as_bool().unwrap_or(false),
+            },
+            Command::GetConfig => Response::Config(data),
+            Command::SetConfig { .. } => Response::SetConfigOk,
+            Command::Frames => Response::Frames(data.as_array().cloned().unwrap_or_default()),
+            Command::Uptime => Response::Uptime {
+                uptime_seconds: data["uptime_seconds"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("missing uptime_seconds in: {data}"))?,
+            },
+        })
     }
 }
 
-/// Runs a blocking serial loop, sending uptime results through `tx`.
-/// Dropping `tx` will cause this function to return.
-pub fn serial_loop(port: String, tx: tokio::sync::mpsc::Sender<Option<u64>>) {
-    let mut conn = match Connection::open(&port) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("open {port}: {e}");
-            return;
-        }
-    };
-
-    loop {
-        let uptime = conn
-            .request::<StatusResponse>(&Command::Uptime)
-            .map_err(|e| log::warn!("request: {e}"))
-            .ok()
-            .map(|r| r.uptime_seconds);
-
-        if tx.blocking_send(uptime).is_err() {
-            break;
-        }
-        std::thread::sleep(Duration::from_secs(1));
-    }
+pub fn find_port() -> Option<String> {
+    serialport::available_ports().ok()?.into_iter().find_map(|p| match p.port_type {
+        serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
+        _ => None,
+    })
 }

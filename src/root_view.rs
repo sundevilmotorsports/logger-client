@@ -11,7 +11,7 @@ use warpui::{
 };
 use warpui::r#async::Timer;
 
-use crate::device;
+use crate::device::{self, Command, Connection, Response};
 
 const BG: ColorU = ColorU { r: 13, g: 13, b: 15, a: 255 };
 const FG: ColorU = ColorU { r: 200, g: 200, b: 210, a: 255 };
@@ -21,8 +21,6 @@ const AMBER: ColorU = ColorU { r: 200, g: 160, b: 60, a: 255 };
 
 const FONT_SIZE: f32 = 13.;
 const LABEL_COL: usize = 10;
-
-// ── Components ──────────────────────────────────────────────────────────────
 
 fn text(s: impl Into<String>, font: FamilyId, color: ColorU) -> Box<dyn Element> {
     Text::new_inline(s.into(), font, FONT_SIZE).with_color(color).finish()
@@ -50,8 +48,6 @@ fn format_uptime(secs: u64) -> String {
     if h > 0 { format!("{}:{:02}:{:02}", h, m, s) } else { format!("{}:{:02}", m, s) }
 }
 
-// ── View ─────────────────────────────────────────────────────────────────────
-
 pub struct RootView {
     port: Option<String>,
     uptime: Option<u64>,
@@ -74,57 +70,83 @@ impl RootView {
         ctx.spawn(
             async move {
                 loop {
-                    match device::find_port() {
-                        None => {
-                            let _ = spawner
-                                .spawn(|view: &mut RootView, ctx| {
-                                    view.port = None;
-                                    view.uptime = None;
-                                    let wid = ctx.window_id();
-                                    ctx.windows().set_window_title(wid, "logger-client");
-                                    ctx.notify();
-                                })
-                                .await;
-                            Timer::after(Duration::from_secs(3)).await;
-                        }
-                        Some(port) => {
-                            let port_title = port.clone();
-                            if spawner
-                                .spawn(move |view: &mut RootView, ctx| {
-                                    view.port = Some(port_title.clone());
-                                    view.uptime = None;
-                                    let wid = ctx.window_id();
-                                    ctx.windows()
-                                        .set_window_title(wid, &format!("● {}", port_title));
-                                    ctx.notify();
-                                })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
+                    let Some(port_name) = device::find_port() else {
+                        let _ = spawner
+                            .spawn(|view: &mut RootView, ctx| {
+                                view.port = None;
+                                view.uptime = None;
+                                let wid = ctx.window_id();
+                                ctx.windows().set_window_title(wid, "logger-client");
+                                ctx.notify();
+                            })
+                            .await;
+                        Timer::after(Duration::from_secs(3)).await;
+                        continue;
+                    };
 
-                            // Open the port once and keep it alive; reopening every second
-                            // triggers the ESP32 auto-reset circuit via DTR.
-                            let (tx, mut rx) = tokio::sync::mpsc::channel::<Option<u64>>(4);
-                            std::thread::spawn(move || device::serial_loop(port, tx));
+                    let port_for_open = port_name.clone();
+                    let maybe_conn = tokio::task::spawn_blocking(move || {
+                        let mut conn = Connection::open(&port_for_open).ok()?;
+                        matches!(conn.request(Command::Ping), Ok(Response::Pong))
+                            .then_some(conn)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
 
-                            while let Some(uptime) = rx.recv().await {
-                                if spawner
-                                    .spawn(move |view: &mut RootView, ctx| {
-                                        view.uptime = uptime;
-                                        ctx.notify();
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    return;
+                    let Some(conn) = maybe_conn else {
+                        Timer::after(Duration::from_secs(1)).await;
+                        continue;
+                    };
+
+                    let title = port_name.clone();
+                    if spawner
+                        .spawn(move |view: &mut RootView, ctx| {
+                            view.port = Some(title.clone());
+                            view.uptime = None;
+                            let wid = ctx.window_id();
+                            ctx.windows().set_window_title(wid, &format!("● {title}"));
+                            ctx.notify();
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(4);
+                    std::thread::spawn(move || {
+                        let mut conn = conn;
+                        loop {
+                            match conn.request(Command::Uptime) {
+                                Ok(Response::Uptime { uptime_seconds }) => {
+                                    if tx.blocking_send(uptime_seconds).is_err() {
+                                        break;
+                                    }
+                                }
+                                other => {
+                                    log::warn!("uptime: {other:?}");
+                                    break;
                                 }
                             }
-                            // Thread exited (port error/disconnect) — rescan
-                            Timer::after(Duration::from_secs(1)).await;
+                            std::thread::sleep(Duration::from_secs(1));
+                        }
+                    });
+
+                    while let Some(uptime) = rx.recv().await {
+                        if spawner
+                            .spawn(move |view: &mut RootView, ctx| {
+                                view.uptime = Some(uptime);
+                                ctx.notify();
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return;
                         }
                     }
+
+                    Timer::after(Duration::from_secs(1)).await;
                 }
             },
             |_, _, _| {},
@@ -149,7 +171,8 @@ impl View for RootView {
             None => ("scanning...", AMBER),
         };
         let port_str = self.port.clone().unwrap_or_else(|| "—".to_string());
-        let uptime_str = self.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
+        let uptime_str =
+            self.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
 
         let content = Flex::column()
             .with_spacing(4.)
