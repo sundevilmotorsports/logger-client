@@ -117,6 +117,7 @@ impl View for RootView {
 
         let req_tx = self.req_tx.clone();
         let font = self.font;
+        
         let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
             let color = if ms.is_hovered() { FG } else { MUTED };
             Text::new_inline("[ ping ]", font, FONT_SIZE).with_color(color).finish()
