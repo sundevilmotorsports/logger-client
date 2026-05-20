@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::borrow::Cow;
+pub mod device;
 pub mod root_view;
 
 extern crate warpui;
@@ -23,6 +24,7 @@ impl AssetProvider for Assets {
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
     let callbacks = platform::AppCallbacks {
         on_should_close_window: Some(Box::new(|_, _| std::process::exit(0))),
         on_should_terminate_app: Some(Box::new(|_| std::process::exit(0))),

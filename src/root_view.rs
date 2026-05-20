@@ -11,6 +11,8 @@ use warpui::{
 };
 use warpui::r#async::Timer;
 
+use crate::device;
+
 const BG: ColorU = ColorU { r: 13, g: 13, b: 15, a: 255 };
 const FG: ColorU = ColorU { r: 200, g: 200, b: 210, a: 255 };
 const MUTED: ColorU = ColorU { r: 80, g: 80, b: 95, a: 255 };
@@ -20,16 +22,39 @@ const AMBER: ColorU = ColorU { r: 200, g: 160, b: 60, a: 255 };
 const FONT_SIZE: f32 = 13.;
 const LABEL_COL: usize = 10;
 
-fn find_usb_serial_port() -> Option<String> {
-    let ports = serialport::available_ports().ok()?;
-    ports.into_iter().find_map(|p| match p.port_type {
-        serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
-        _ => None,
-    })
+// ── Components ──────────────────────────────────────────────────────────────
+
+fn text(s: impl Into<String>, font: FamilyId, color: ColorU) -> Box<dyn Element> {
+    Text::new_inline(s.into(), font, FONT_SIZE).with_color(color).finish()
 }
+
+fn info_row(
+    label: &str,
+    value: impl Into<String>,
+    font: FamilyId,
+    value_color: ColorU,
+) -> Box<dyn Element> {
+    let padded = format!("{:<width$}", label, width = LABEL_COL);
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_alignment(MainAxisAlignment::Start)
+        .with_child(text(padded, font, MUTED))
+        .with_child(text(value, font, value_color))
+        .finish()
+}
+
+fn format_uptime(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 { format!("{}:{:02}:{:02}", h, m, s) } else { format!("{}:{:02}", m, s) }
+}
+
+// ── View ─────────────────────────────────────────────────────────────────────
 
 pub struct RootView {
     port: Option<String>,
+    uptime: Option<u64>,
     font: FamilyId,
 }
 
@@ -49,40 +74,63 @@ impl RootView {
         ctx.spawn(
             async move {
                 loop {
-                    let port = find_usb_serial_port();
-                    if spawner
-                        .spawn(move |view: &mut RootView, ctx| {
-                            view.port = port;
-                            ctx.notify();
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
+                    match device::find_port() {
+                        None => {
+                            let _ = spawner
+                                .spawn(|view: &mut RootView, ctx| {
+                                    view.port = None;
+                                    view.uptime = None;
+                                    let wid = ctx.window_id();
+                                    ctx.windows().set_window_title(wid, "logger-client");
+                                    ctx.notify();
+                                })
+                                .await;
+                            Timer::after(Duration::from_secs(3)).await;
+                        }
+                        Some(port) => {
+                            let port_title = port.clone();
+                            if spawner
+                                .spawn(move |view: &mut RootView, ctx| {
+                                    view.port = Some(port_title.clone());
+                                    view.uptime = None;
+                                    let wid = ctx.window_id();
+                                    ctx.windows()
+                                        .set_window_title(wid, &format!("● {}", port_title));
+                                    ctx.notify();
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+
+                            // Open the port once and keep it alive; reopening every second
+                            // triggers the ESP32 auto-reset circuit via DTR.
+                            let (tx, mut rx) = tokio::sync::mpsc::channel::<Option<u64>>(4);
+                            std::thread::spawn(move || device::serial_loop(port, tx));
+
+                            while let Some(uptime) = rx.recv().await {
+                                if spawner
+                                    .spawn(move |view: &mut RootView, ctx| {
+                                        view.uptime = uptime;
+                                        ctx.notify();
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            // Thread exited (port error/disconnect) — rescan
+                            Timer::after(Duration::from_secs(1)).await;
+                        }
                     }
-                    Timer::after(Duration::from_secs(3)).await;
                 }
             },
             |_, _, _| {},
         );
 
-        Self { port: None, font }
-    }
-
-    fn text(&self, s: impl Into<String>, color: ColorU) -> Box<dyn Element> {
-        Text::new_inline(s.into(), self.font, FONT_SIZE)
-            .with_color(color)
-            .finish()
-    }
-
-    fn row(&self, label: &str, value: impl Into<String>, value_color: ColorU) -> Box<dyn Element> {
-        let padded = format!("{:<width$}", label, width = LABEL_COL);
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(self.text(padded, MUTED))
-            .with_child(self.text(value, value_color))
-            .finish()
+        Self { port: None, uptime: None, font }
     }
 }
 
@@ -101,13 +149,15 @@ impl View for RootView {
             None => ("scanning...", AMBER),
         };
         let port_str = self.port.clone().unwrap_or_else(|| "—".to_string());
+        let uptime_str = self.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
 
         let content = Flex::column()
             .with_spacing(4.)
-            .with_child(self.text("logger-client", MUTED))
-            .with_child(self.text("", MUTED))
-            .with_child(self.row("status", status_str, status_color))
-            .with_child(self.row("port", port_str, FG))
+            .with_child(text("logger-client", self.font, MUTED))
+            .with_child(text("", self.font, MUTED))
+            .with_child(info_row("status", status_str, self.font, status_color))
+            .with_child(info_row("port", port_str, self.font, FG))
+            .with_child(info_row("uptime", uptime_str, self.font, FG))
             .finish();
 
         let ui = Stack::new()
