@@ -40,7 +40,10 @@ impl Connection {
         std::thread::sleep(Duration::from_millis(1500));
         port.clear(serialport::ClearBuffer::Input).ok();
         let writer = port.try_clone()?;
-        Ok(Self { writer, reader: BufReader::new(port) })
+        Ok(Self {
+            writer,
+            reader: BufReader::new(port),
+        })
     }
 
     fn request(&mut self, cmd: Command) -> anyhow::Result<Response> {
@@ -86,12 +89,15 @@ impl Connection {
 pub type RequestTx = tokio::sync::mpsc::UnboundedSender<Command>;
 
 pub fn find_port() -> Option<String> {
-    serialport::available_ports().ok()?.into_iter().find_map(|p| match p.port_type {
-        serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
-            Some(p.port_name)
-        }
-        _ => None,
-    })
+    serialport::available_ports()
+        .ok()?
+        .into_iter()
+        .find_map(|p| match p.port_type {
+            serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
+                Some(p.port_name)
+            }
+            _ => None,
+        })
 }
 
 #[derive(Clone, Default)]
@@ -101,7 +107,10 @@ pub struct DeviceState {
     pub last_ping: Option<bool>,
 }
 
-pub fn poll(tx: tokio::sync::watch::Sender<DeviceState>, mut req_rx: tokio::sync::mpsc::UnboundedReceiver<Command>) {
+pub fn poll(
+    tx: tokio::sync::watch::Sender<DeviceState>,
+    mut req_rx: tokio::sync::mpsc::UnboundedReceiver<Command>,
+) {
     let mut state = DeviceState::default();
     loop {
         let Some(port_name) = find_port() else {
@@ -123,7 +132,11 @@ pub fn poll(tx: tokio::sync::watch::Sender<DeviceState>, mut req_rx: tokio::sync
             continue;
         };
 
-        state = DeviceState { port: Some(port_name), uptime: None, last_ping: None };
+        state = DeviceState {
+            port: Some(port_name),
+            uptime: None,
+            last_ping: None,
+        };
         tx.send(state.clone()).ok();
 
         loop {
