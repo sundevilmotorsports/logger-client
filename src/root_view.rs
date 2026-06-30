@@ -1,22 +1,52 @@
 use pathfinder_color::ColorU;
 use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
     elements::{
         ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex,
         Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement, Rect, Stack, Text,
     },
     fonts::FamilyId,
     platform::Cursor,
-    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
 use crate::device::{self, DeviceState};
 
-const BG: ColorU = ColorU { r: 13, g: 13, b: 15, a: 255 };
-const FG: ColorU = ColorU { r: 200, g: 200, b: 210, a: 255 };
-const MUTED: ColorU = ColorU { r: 80, g: 80, b: 95, a: 255 };
-const GREEN: ColorU = ColorU { r: 80, g: 200, b: 120, a: 255 };
-const AMBER: ColorU = ColorU { r: 200, g: 160, b: 60, a: 255 };
-const RED: ColorU = ColorU { r: 200, g: 80, b: 80, a: 255 };
+const BG: ColorU = ColorU {
+    r: 13,
+    g: 13,
+    b: 15,
+    a: 255,
+};
+const FG: ColorU = ColorU {
+    r: 200,
+    g: 200,
+    b: 210,
+    a: 255,
+};
+const MUTED: ColorU = ColorU {
+    r: 80,
+    g: 80,
+    b: 95,
+    a: 255,
+};
+const GREEN: ColorU = ColorU {
+    r: 80,
+    g: 200,
+    b: 120,
+    a: 255,
+};
+const AMBER: ColorU = ColorU {
+    r: 200,
+    g: 160,
+    b: 60,
+    a: 255,
+};
+const RED: ColorU = ColorU {
+    r: 200,
+    g: 80,
+    b: 80,
+    a: 255,
+};
 
 const FONT_SIZE: f32 = 13.;
 const LABEL_COL: usize = 10;
@@ -44,7 +74,11 @@ fn subscribe<V, S>(
 
 fn format_uptime(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
-    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 pub struct RootView {
@@ -71,11 +105,18 @@ impl RootView {
         std::thread::spawn(move || device::poll(tx, req_rx));
         subscribe(ctx, rx, Self::on_device_state);
 
-        Self { state: DeviceState::default(), font, req_tx, ping_hover: Default::default() }
+        Self {
+            state: DeviceState::default(),
+            font,
+            req_tx,
+            ping_hover: Default::default(),
+        }
     }
 
     fn on_device_state(&mut self, ctx: &mut ViewContext<Self>, state: DeviceState) {
-        let title = state.port.as_deref()
+        let title = state
+            .port
+            .as_deref()
             .map(|p| format!("● {p}"))
             .unwrap_or_else(|| "logger-client".to_string());
         let wid = ctx.window_id();
@@ -89,8 +130,16 @@ impl RootView {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(Text::new_inline(padded, self.font, FONT_SIZE).with_color(MUTED).finish())
-            .with_child(Text::new_inline(value.to_string(), self.font, FONT_SIZE).with_color(color).finish())
+            .with_child(
+                Text::new_inline(padded, self.font, FONT_SIZE)
+                    .with_color(MUTED)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(value.to_string(), self.font, FONT_SIZE)
+                    .with_color(color)
+                    .finish(),
+            )
             .finish()
     }
 }
@@ -100,7 +149,9 @@ impl Entity for RootView {
 }
 
 impl View for RootView {
-    fn ui_name() -> &'static str { "RootView" }
+    fn ui_name() -> &'static str {
+        "RootView"
+    }
 
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
         let (status, status_color) = match &self.state.port {
@@ -108,7 +159,11 @@ impl View for RootView {
             None => ("scanning...", AMBER),
         };
         let port = self.state.port.as_deref().unwrap_or("—");
-        let uptime = self.state.uptime.map(format_uptime).unwrap_or_else(|| "—".to_string());
+        let uptime = self
+            .state
+            .uptime
+            .map(format_uptime)
+            .unwrap_or_else(|| "—".to_string());
         let (ping_str, ping_color) = match self.state.last_ping {
             Some(true) => ("ok", GREEN),
             Some(false) => ("error", RED),
@@ -117,28 +172,49 @@ impl View for RootView {
 
         let req_tx = self.req_tx.clone();
         let font = self.font;
+
         let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
             let color = if ms.is_hovered() { FG } else { MUTED };
-            Text::new_inline("[ ping ]", font, FONT_SIZE).with_color(color).finish()
+            Text::new_inline("[ ping ]", font, FONT_SIZE)
+                .with_color(color)
+                .finish()
         })
         .with_cursor(Cursor::PointingHand)
-        .on_click(move |_, _, _| { let _ = req_tx.send(device::Command::Ping); })
+        .on_click(move |_, _, _| {
+            let _ = req_tx.send(device::Command::Ping);
+        })
         .finish();
 
         let content = Flex::column()
             .with_spacing(4.)
-            .with_child(Text::new_inline("logger-client", self.font, FONT_SIZE).with_color(MUTED).finish())
-            .with_child(Text::new_inline("", self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(
+                Text::new_inline("logger-client", self.font, FONT_SIZE)
+                    .with_color(MUTED)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline("", self.font, FONT_SIZE)
+                    .with_color(MUTED)
+                    .finish(),
+            )
             .with_child(self.row("status", status, status_color))
             .with_child(self.row("port", port, FG))
             .with_child(self.row("uptime", &uptime, FG))
-            .with_child(Text::new_inline("", self.font, FONT_SIZE).with_color(MUTED).finish())
+            .with_child(
+                Text::new_inline("", self.font, FONT_SIZE)
+                    .with_color(MUTED)
+                    .finish(),
+            )
             .with_child(
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(8.)
                     .with_child(ping_btn)
-                    .with_child(Text::new_inline(ping_str, self.font, FONT_SIZE).with_color(ping_color).finish())
+                    .with_child(
+                        Text::new_inline(ping_str, self.font, FONT_SIZE)
+                            .with_color(ping_color)
+                            .finish(),
+                    )
                     .finish(),
             )
             .finish();
