@@ -34,8 +34,7 @@ impl Connection {
         let mut port = serialport::new(port_name, 115200)
             .timeout(Duration::from_millis(1000))
             .open()?;
-        let _ = port.write_data_terminal_ready(false);
-        let _ = port.write_request_to_send(false);
+
         port.clear(serialport::ClearBuffer::Input).ok();
         Ok(Self { port })
     }
@@ -82,7 +81,9 @@ pub type RequestTx = tokio::sync::mpsc::UnboundedSender<Command>;
 
 pub fn find_port() -> Option<String> {
     serialport::available_ports().ok()?.into_iter().find_map(|p| match p.port_type {
-        serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
+        serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
+            Some(p.port_name)
+        }
         _ => None,
     })
 }
