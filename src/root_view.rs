@@ -164,6 +164,13 @@ impl View for RootView {
             .uptime
             .map(format_uptime)
             .unwrap_or_else(|| "—".to_string());
+        let (gps_str, gps_color) = match &self.state.gps {
+            Some(f) => (
+                format!("{:.5}, {:.5}  {:.0}m  {} sats", f.lat, f.lon, f.alt_m, f.sats),
+                GREEN,
+            ),
+            None => ("no fix".to_string(), MUTED),
+        };
         let (ping_str, ping_color) = match self.state.last_ping {
             Some(true) => ("ok", GREEN),
             Some(false) => ("error", RED),
@@ -200,6 +207,7 @@ impl View for RootView {
             .with_child(self.row("status", status, status_color))
             .with_child(self.row("port", port, FG))
             .with_child(self.row("uptime", &uptime, FG))
+            .with_child(self.row("gps", &gps_str, gps_color))
             .with_child(
                 Text::new_inline("", self.font, FONT_SIZE)
                     .with_color(MUTED)
