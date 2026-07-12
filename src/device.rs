@@ -13,6 +13,7 @@ pub enum Command {
     SetConfig { args: serde_json::Value },
     Frames,
     Uptime,
+    Gps,
 }
 
 #[derive(Debug)]
@@ -23,6 +24,15 @@ pub enum Response {
     SetConfigOk,
     Frames(Vec<serde_json::Value>),
     Uptime { uptime_seconds: u64 },
+    Gps(GpsFix),
+}
+
+#[derive(Debug, Clone)]
+pub struct GpsFix {
+    pub lat: f64,
+    pub lon: f64,
+    pub alt_m: f64,
+    pub sats: u64,
 }
 
 struct Connection {
@@ -82,6 +92,12 @@ impl Connection {
                     .as_u64()
                     .ok_or_else(|| anyhow!("missing uptime_seconds in: {data}"))?,
             },
+            Command::Gps => Response::Gps(GpsFix {
+                lat: data["lat"].as_f64().ok_or_else(|| anyhow!("missing lat in: {data}"))?,
+                lon: data["lon"].as_f64().ok_or_else(|| anyhow!("missing lon in: {data}"))?,
+                alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
+                sats: data["sats"].as_u64().unwrap_or(0),
+            }),
         })
     }
 }
@@ -105,6 +121,7 @@ pub struct DeviceState {
     pub port: Option<String>,
     pub uptime: Option<u64>,
     pub last_ping: Option<bool>,
+    pub gps: Option<GpsFix>,
 }
 
 pub fn poll(
@@ -132,11 +149,7 @@ pub fn poll(
             continue;
         };
 
-        state = DeviceState {
-            port: Some(port_name),
-            uptime: None,
-            last_ping: None,
-        };
+        state = DeviceState { port: Some(port_name), ..Default::default() };
         tx.send(state.clone()).ok();
 
         loop {
@@ -153,6 +166,10 @@ pub fn poll(
             match conn.request(Command::Uptime) {
                 Ok(Response::Uptime { uptime_seconds }) => {
                     state.uptime = Some(uptime_seconds);
+                    state.gps = match conn.request(Command::Gps) {
+                        Ok(Response::Gps(fix)) => Some(fix),
+                        _ => None,
+                    };
                     if tx.send(state.clone()).is_err() {
                         return;
                     }
