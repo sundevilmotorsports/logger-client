@@ -61,8 +61,8 @@ impl Connection {
         let raw = raw.trim();
         log::debug!("device → {raw}");
 
-        let envelope: serde_json::Value = serde_json::from_str(raw)
-            .map_err(|e| anyhow!("bad JSON ({e}): {raw}"))?;
+        let envelope: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| anyhow!("bad JSON ({e}): {raw}"))?;
 
         if envelope["ok"].as_bool() != Some(true) {
             let msg = envelope["error"].as_str().unwrap_or("unknown error");
@@ -84,8 +84,12 @@ impl Connection {
                     .ok_or_else(|| anyhow!("missing uptime_seconds in: {data}"))?,
             },
             Command::Gps => Response::Gps(GpsFix {
-                lat: data["lat"].as_f64().ok_or_else(|| anyhow!("missing lat in: {data}"))?,
-                lon: data["lon"].as_f64().ok_or_else(|| anyhow!("missing lon in: {data}"))?,
+                lat: data["lat"]
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("missing lat in: {data}"))?,
+                lon: data["lon"]
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("missing lon in: {data}"))?,
                 alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
                 sats: data["sats"].as_u64().unwrap_or(0),
             }),
@@ -96,12 +100,15 @@ impl Connection {
 pub type RequestTx = tokio::sync::mpsc::UnboundedSender<Command>;
 
 pub fn find_port() -> Option<String> {
-    serialport::available_ports().ok()?.into_iter().find_map(|p| match p.port_type {
-        serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
-            Some(p.port_name)
-        }
-        _ => None,
-    })
+    serialport::available_ports()
+        .ok()?
+        .into_iter()
+        .find_map(|p| match p.port_type {
+            serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
+                Some(p.port_name)
+            }
+            _ => None,
+        })
 }
 
 #[derive(Clone, Default)]
@@ -112,7 +119,10 @@ pub struct DeviceState {
     pub gps: Option<GpsFix>,
 }
 
-pub fn poll(tx: tokio::sync::watch::Sender<DeviceState>, mut req_rx: tokio::sync::mpsc::UnboundedReceiver<Command>) {
+pub fn poll(
+    tx: tokio::sync::watch::Sender<DeviceState>,
+    mut req_rx: tokio::sync::mpsc::UnboundedReceiver<Command>,
+) {
     let mut state = DeviceState::default();
     loop {
         let Some(port_name) = find_port() else {
@@ -134,7 +144,10 @@ pub fn poll(tx: tokio::sync::watch::Sender<DeviceState>, mut req_rx: tokio::sync
             continue;
         };
 
-        state = DeviceState { port: Some(port_name), ..Default::default() };
+        state = DeviceState {
+            port: Some(port_name),
+            ..Default::default()
+        };
         tx.send(state.clone()).ok();
 
         loop {
