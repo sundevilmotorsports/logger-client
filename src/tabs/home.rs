@@ -62,7 +62,10 @@ impl HomeTab {
             .unwrap_or_else(|| "—".to_string());
         let (gps_str, gps_color) = match &state.gps {
             Some(f) => (
-                format!("{:.5}, {:.5}  {:.0}m  {} sats", f.lat, f.lon, f.alt_m, f.sats),
+                format!(
+                    "{:.5}, {:.5}  {:.0}m  {} sats",
+                    f.lat, f.lon, f.alt_m, f.sats
+                ),
                 GREEN,
             ),
             None => ("no fix".to_string(), MUTED),

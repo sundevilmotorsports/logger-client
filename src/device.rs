@@ -93,8 +93,12 @@ impl Connection {
                     .ok_or_else(|| anyhow!("missing uptime_seconds in: {data}"))?,
             },
             Command::Gps => Response::Gps(GpsFix {
-                lat: data["lat"].as_f64().ok_or_else(|| anyhow!("missing lat in: {data}"))?,
-                lon: data["lon"].as_f64().ok_or_else(|| anyhow!("missing lon in: {data}"))?,
+                lat: data["lat"]
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("missing lat in: {data}"))?,
+                lon: data["lon"]
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("missing lon in: {data}"))?,
                 alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
                 sats: data["sats"].as_u64().unwrap_or(0),
             }),
@@ -149,7 +153,10 @@ pub fn poll(
             continue;
         };
 
-        state = DeviceState { port: Some(port_name), ..Default::default() };
+        state = DeviceState {
+            port: Some(port_name),
+            ..Default::default()
+        };
         tx.send(state.clone()).ok();
 
         loop {
