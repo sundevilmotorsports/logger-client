@@ -2,6 +2,8 @@ use anyhow::{Result, anyhow};
 use std::borrow::Cow;
 pub mod device;
 pub mod root_view;
+pub mod tabs;
+pub mod theme;
 
 extern crate warpui;
 use rust_embed::RustEmbed;
@@ -34,7 +36,10 @@ fn main() -> Result<()> {
     let app_builder = platform::AppBuilder::new(callbacks, Box::new(ASSETS), None);
     let _ = app_builder.run(move |ctx| {
         ctx.add_window(
-            warpui::AddWindowOptions::default(),
+            warpui::AddWindowOptions {
+                title: Some("Logger Client".to_string()),
+                ..Default::default()
+            },
             root_view::RootView::new,
         );
     });

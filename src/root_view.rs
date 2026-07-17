@@ -1,55 +1,16 @@
-use pathfinder_color::ColorU;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
     elements::{
         ConstrainedBox, Container, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex,
-        Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement, Rect, Stack, Text,
+        Hoverable, MouseStateHandle, ParentElement, Rect, Stack, Text,
     },
     fonts::FamilyId,
     platform::Cursor,
 };
 
 use crate::device::{self, DeviceState};
-
-const BG: ColorU = ColorU {
-    r: 13,
-    g: 13,
-    b: 15,
-    a: 255,
-};
-const FG: ColorU = ColorU {
-    r: 200,
-    g: 200,
-    b: 210,
-    a: 255,
-};
-const MUTED: ColorU = ColorU {
-    r: 80,
-    g: 80,
-    b: 95,
-    a: 255,
-};
-const GREEN: ColorU = ColorU {
-    r: 80,
-    g: 200,
-    b: 120,
-    a: 255,
-};
-const AMBER: ColorU = ColorU {
-    r: 200,
-    g: 160,
-    b: 60,
-    a: 255,
-};
-const RED: ColorU = ColorU {
-    r: 200,
-    g: 80,
-    b: 80,
-    a: 255,
-};
-
-const FONT_SIZE: f32 = 13.;
-const LABEL_COL: usize = 10;
+use crate::tabs::{ConfigurationTab, HomeTab, LogsTab, Tab};
+use crate::theme::{BG, FG, FONT_SIZE, MUTED, TITLEBAR_BG, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET};
 
 fn subscribe<V, S>(
     ctx: &mut ViewContext<V>,
@@ -72,20 +33,20 @@ fn subscribe<V, S>(
     );
 }
 
-fn format_uptime(secs: u64) -> String {
-    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
+#[derive(Debug)]
+pub enum RootViewAction {
+    SelectTab(Tab),
 }
 
 pub struct RootView {
     state: DeviceState,
     font: FamilyId,
     req_tx: device::RequestTx,
-    ping_hover: MouseStateHandle,
+    selected_tab: Tab,
+    tab_hovers: [MouseStateHandle; Tab::ALL.len()],
+    home_tab: HomeTab,
+    logs_tab: LogsTab,
+    configuration_tab: ConfigurationTab,
 }
 
 impl RootView {
@@ -109,7 +70,11 @@ impl RootView {
             state: DeviceState::default(),
             font,
             req_tx,
-            ping_hover: Default::default(),
+            selected_tab: Tab::Home,
+            tab_hovers: Default::default(),
+            home_tab: HomeTab::default(),
+            logs_tab: LogsTab::default(),
+            configuration_tab: ConfigurationTab::default(),
         }
     }
 
@@ -118,29 +83,68 @@ impl RootView {
             .port
             .as_deref()
             .map(|p| format!("● {p}"))
-            .unwrap_or_else(|| "logger-client".to_string());
+            .unwrap_or_else(|| "Logger Client".to_string());
         let wid = ctx.window_id();
         ctx.windows().set_window_title(wid, &title);
         self.state = state;
         ctx.notify();
     }
 
-    fn row(&self, label: &str, value: &str, color: ColorU) -> Box<dyn Element> {
-        let padded = format!("{label:<LABEL_COL$}");
-        Flex::row()
+    fn tab_bar(&self) -> Box<dyn Element> {
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(
-                Text::new_inline(padded, self.font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
-            )
-            .with_child(
-                Text::new_inline(value.to_string(), self.font, FONT_SIZE)
-                    .with_color(color)
-                    .finish(),
-            )
-            .finish()
+            .with_spacing(24.);
+
+        for (i, tab) in Tab::ALL.into_iter().enumerate() {
+            let is_selected = tab == self.selected_tab;
+            let label = if is_selected {
+                format!("[{}]", tab.title())
+            } else {
+                format!(" {} ", tab.title().to_string())
+            };
+            let font = self.font;
+
+            let btn = Hoverable::new(self.tab_hovers[i].clone(), move |ms| {
+                let color = if is_selected || ms.is_hovered() {
+                    FG
+                } else {
+                    MUTED
+                };
+                Container::new(
+                    Text::new_inline(label.clone(), font, FONT_SIZE)
+                        .with_color(color)
+                        .finish(),
+                )
+                .with_vertical_padding(6.)
+                .with_horizontal_padding(4.)
+                .finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(RootViewAction::SelectTab(tab));
+            })
+            .finish();
+
+            row = row.with_child(btn);
+        }
+
+        row.finish()
+    }
+
+    /// A full-width strip behind the tabs, colored differently from the body
+    fn title_bar(&self) -> Box<dyn Element> {
+        ConstrainedBox::new(
+            Stack::new()
+                .with_child(Rect::new().with_background_color(TITLEBAR_BG).finish())
+                .with_child(
+                    Container::new(self.tab_bar())
+                        .with_padding_left(TITLEBAR_LEFT_INSET)
+                        .finish(),
+                )
+                .finish(),
+        )
+        .with_height(TITLEBAR_HEIGHT)
+        .finish()
     }
 }
 
@@ -154,86 +158,23 @@ impl View for RootView {
     }
 
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
-        let (status, status_color) = match &self.state.port {
-            Some(_) => ("connected", GREEN),
-            None => ("scanning...", AMBER),
-        };
-        let port = self.state.port.as_deref().unwrap_or("—");
-        let uptime = self
-            .state
-            .uptime
-            .map(format_uptime)
-            .unwrap_or_else(|| "—".to_string());
-        let (gps_str, gps_color) = match &self.state.gps {
-            Some(f) => (
-                format!("{:.5}, {:.5}  {:.0}m  {} sats", f.lat, f.lon, f.alt_m, f.sats),
-                GREEN,
-            ),
-            None => ("no fix".to_string(), MUTED),
-        };
-        let (ping_str, ping_color) = match self.state.last_ping {
-            Some(true) => ("ok", GREEN),
-            Some(false) => ("error", RED),
-            None => ("—", MUTED),
+        let content = match self.selected_tab {
+            Tab::Home => self.home_tab.render(&self.state, self.font, &self.req_tx),
+            Tab::Logs => self.logs_tab.render(self.font),
+            Tab::Configuration => self.configuration_tab.render(self.font),
         };
 
-        let req_tx = self.req_tx.clone();
-        let font = self.font;
-
-        let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
-            let color = if ms.is_hovered() { FG } else { MUTED };
-            Text::new_inline("[ ping ]", font, FONT_SIZE)
-                .with_color(color)
-                .finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |_, _, _| {
-            let _ = req_tx.send(device::Command::Ping);
-        })
-        .finish();
-
-        let content = Flex::column()
-            .with_spacing(4.)
-            .with_child(
-                Text::new_inline("logger-client", self.font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
-            )
-            .with_child(
-                Text::new_inline("", self.font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
-            )
-            .with_child(self.row("status", status, status_color))
-            .with_child(self.row("port", port, FG))
-            .with_child(self.row("uptime", &uptime, FG))
-            .with_child(self.row("gps", &gps_str, gps_color))
-            .with_child(
-                Text::new_inline("", self.font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
-            )
-            .with_child(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(8.)
-                    .with_child(ping_btn)
-                    .with_child(
-                        Text::new_inline(ping_str, self.font, FONT_SIZE)
-                            .with_color(ping_color)
-                            .finish(),
-                    )
-                    .finish(),
-            )
+        let body = Container::new(ConstrainedBox::new(content).with_max_width(400.).finish())
+            .with_padding_left(32.)
+            .with_padding_right(32.)
+            .with_padding_bottom(32.)
+            .with_padding_top(TITLEBAR_HEIGHT + 24.)
             .finish();
 
         let ui = Stack::new()
             .with_child(Rect::new().with_background_color(BG).finish())
-            .with_child(
-                Container::new(ConstrainedBox::new(content).with_max_width(400.).finish())
-                    .with_uniform_padding(32.)
-                    .finish(),
-            )
+            .with_child(body)
+            .with_child(self.title_bar())
             .finish();
 
         EventHandler::new(ui)
@@ -248,5 +189,11 @@ impl View for RootView {
 }
 
 impl TypedActionView for RootView {
-    type Action = ();
+    type Action = RootViewAction;
+
+    fn handle_action(&mut self, action: &RootViewAction, ctx: &mut ViewContext<Self>) {
+        let RootViewAction::SelectTab(tab) = action;
+        self.selected_tab = *tab;
+        ctx.notify();
+    }
 }
