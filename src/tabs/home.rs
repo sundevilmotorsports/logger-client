@@ -1,16 +1,7 @@
-use pathfinder_color::ColorU;
-use warpui::{
-    Element,
-    elements::{
-        CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement,
-        Text,
-    },
-    fonts::FamilyId,
-    platform::Cursor,
-};
+use gpui::{AnyElement, Hsla, div, prelude::*};
 
 use crate::device::{self, DeviceState};
-use crate::theme::{AMBER, FG, FONT_SIZE, GREEN, LABEL_COL, MUTED, RED};
+use crate::theme::{self, FONT_SIZE};
 
 fn format_uptime(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
@@ -22,38 +13,29 @@ fn format_uptime(secs: u64) -> String {
 }
 
 #[derive(Default)]
-pub struct HomeTab {
-    ping_hover: MouseStateHandle,
-}
+pub struct HomeTab;
 
 impl HomeTab {
-    fn row(&self, font: FamilyId, label: &str, value: &str, color: ColorU) -> Box<dyn Element> {
-        let padded = format!("{label:<LABEL_COL$}");
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_alignment(MainAxisAlignment::Start)
-            .with_child(
-                Text::new_inline(padded, font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
+    fn row(&self, label: &str, value: &str, color: Hsla) -> AnyElement {
+        let padded = format!("{:<width$}", label, width = theme::LABEL_COL);
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(
+                div()
+                    .text_color(theme::muted())
+                    .child(padded)
+                    .whitespace_nowrap(),
             )
-            .with_child(
-                Text::new_inline(value.to_string(), font, FONT_SIZE)
-                    .with_color(color)
-                    .finish(),
-            )
-            .finish()
+            .child(div().text_color(color).child(value.to_string()))
+            .into_any_element()
     }
 
-    pub fn render(
-        &self,
-        state: &DeviceState,
-        font: FamilyId,
-        req_tx: &device::RequestTx,
-    ) -> Box<dyn Element> {
+    pub fn render(&self, state: &DeviceState, req_tx: &device::RequestTx) -> AnyElement {
         let (status, status_color) = match &state.port {
-            Some(_) => ("connected", GREEN),
-            None => ("scanning...", AMBER),
+            Some(_) => ("connected", theme::green()),
+            None => ("scanning...", theme::amber()),
         };
         let port = state.port.as_deref().unwrap_or("—");
         let uptime = state
@@ -66,53 +48,48 @@ impl HomeTab {
                     "{:.5}, {:.5}  {:.0}m  {} sats",
                     f.lat, f.lon, f.alt_m, f.sats
                 ),
-                GREEN,
+                theme::green(),
             ),
-            None => ("no fix".to_string(), MUTED),
+            None => ("no fix".to_string(), theme::muted()),
         };
         let (ping_str, ping_color) = match state.last_ping {
-            Some(true) => ("ok", GREEN),
-            Some(false) => ("error", RED),
-            None => ("—", MUTED),
+            Some(true) => ("ok", theme::green()),
+            Some(false) => ("error", theme::red()),
+            None => ("—", theme::muted()),
         };
 
         let req_tx = req_tx.clone();
 
-        let ping_btn = Hoverable::new(self.ping_hover.clone(), move |ms| {
-            let color = if ms.is_hovered() { FG } else { MUTED };
-            Text::new_inline("[ ping ]", font, FONT_SIZE)
-                .with_color(color)
-                .finish()
-        })
-        .with_cursor(Cursor::PointingHand)
-        .on_click(move |_, _, _| {
-            let _ = req_tx.send(device::Command::Ping);
-        })
-        .finish();
+        let ping_btn = div()
+            .id("ping-button")
+            .text_color(theme::muted())
+            .hover(|s| s.text_color(theme::fg()))
+            .cursor_pointer()
+            .child("[ ping ]")
+            .on_click(move |_, _, _| {
+                let _ = req_tx.send(device::Command::Ping);
+            });
 
-        Flex::column()
-            .with_spacing(4.)
-            .with_child(self.row(font, "status", status, status_color))
-            .with_child(self.row(font, "port", port, FG))
-            .with_child(self.row(font, "uptime", &uptime, FG))
-            .with_child(self.row(font, "gps", &gps_str, gps_color))
-            .with_child(
-                Text::new_inline("", font, FONT_SIZE)
-                    .with_color(MUTED)
-                    .finish(),
+        div()
+            .font(theme::mono_font())
+            .text_size(gpui::px(FONT_SIZE))
+            .flex()
+            .flex_col()
+            .gap(gpui::px(4.))
+            .child(self.row("status", status, status_color))
+            .child(self.row("port", port, theme::fg()))
+            .child(self.row("uptime", &uptime, theme::fg()))
+            .child(self.row("gps", &gps_str, gps_color))
+            .child(div().h(gpui::px(FONT_SIZE)))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(gpui::px(8.))
+                    .child(ping_btn)
+                    .child(div().text_color(ping_color).child(ping_str)),
             )
-            .with_child(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(8.)
-                    .with_child(ping_btn)
-                    .with_child(
-                        Text::new_inline(ping_str, font, FONT_SIZE)
-                            .with_color(ping_color)
-                            .finish(),
-                    )
-                    .finish(),
-            )
-            .finish()
+            .into_any_element()
     }
 }

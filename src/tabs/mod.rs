@@ -6,13 +6,9 @@ pub use configuration::ConfigurationTab;
 pub use home::HomeTab;
 pub use logs::LogsTab;
 
-use warpui::{
-    Element,
-    elements::{Flex, ParentElement, Text},
-    fonts::FamilyId,
-};
+use gpui::{AnyElement, IntoElement, div, prelude::*};
 
-use crate::theme::{FONT_SIZE, MUTED};
+use crate::theme::{self, FONT_SIZE};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -33,12 +29,11 @@ impl Tab {
     }
 }
 
-fn placeholder(font: FamilyId, text: &str) -> Box<dyn Element> {
-    Flex::column()
-        .with_child(
-            Text::new_inline(text.to_string(), font, FONT_SIZE)
-                .with_color(MUTED)
-                .finish(),
-        )
-        .finish()
+fn placeholder(text: &str) -> AnyElement {
+    div()
+        .font(theme::mono_font())
+        .text_size(gpui::px(FONT_SIZE))
+        .text_color(theme::muted())
+        .child(text.to_string())
+        .into_any_element()
 }

@@ -1,4 +1,4 @@
-use warpui::{Element, fonts::FamilyId};
+use gpui::AnyElement;
 
 use super::placeholder;
 
@@ -6,7 +6,7 @@ use super::placeholder;
 pub struct ConfigurationTab;
 
 impl ConfigurationTab {
-    pub fn render(&self, font: FamilyId) -> Box<dyn Element> {
-        placeholder(font, "no configuration yet")
+    pub fn render(&self) -> AnyElement {
+        placeholder("no configuration yet")
     }
 }

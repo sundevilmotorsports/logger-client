@@ -1,48 +1,50 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::borrow::Cow;
 pub mod device;
 pub mod root_view;
 pub mod tabs;
 pub mod theme;
 
-extern crate warpui;
+use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
 use rust_embed::RustEmbed;
-use warpui::{AssetProvider, platform};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "assets"]
 pub struct Assets;
 
-// The static assets we need to load in app.
-pub static ASSETS: Assets = Assets;
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        Ok(<Assets as RustEmbed>::get(path).map(|f| f.data))
+    }
 
-// Implement the AssetProvider trait here (required by App::new).
-impl AssetProvider for Assets {
-    fn get(&self, path: &str) -> Result<Cow<'_, [u8]>> {
-        <Assets as RustEmbed>::get(path)
-            .map(|f| f.data)
-            .ok_or_else(|| anyhow!("no asset exists at path {}", path))
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        Ok(<Assets as RustEmbed>::iter()
+            .filter(|p| p.starts_with(path))
+            .map(SharedString::from)
+            .collect())
     }
 }
 
-fn main() -> Result<()> {
+fn main() {
     env_logger::init();
-    let callbacks = platform::AppCallbacks {
-        on_should_close_window: Some(Box::new(|_, _| std::process::exit(0))),
-        on_should_terminate_app: Some(Box::new(|_| std::process::exit(0))),
-        ..Default::default()
-    };
 
-    let app_builder = platform::AppBuilder::new(callbacks, Box::new(ASSETS), None);
-    let _ = app_builder.run(move |ctx| {
-        ctx.add_window(
-            warpui::AddWindowOptions {
-                title: Some("Logger Client".to_string()),
-                ..Default::default()
-            },
-            root_view::RootView::new,
-        );
-    });
+    gpui::Application::new()
+        .with_assets(Assets)
+        .run(|cx: &mut App| {
+            let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                    titlebar: Some(gpui::TitlebarOptions {
+                        title: Some("Logger Client".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                |window, cx| cx.new(|cx| root_view::RootView::new(window, cx)),
+            )
+            .expect("failed to open window");
 
-    Ok(())
+            cx.activate(true);
+        });
 }
