@@ -27,6 +27,7 @@ impl RootView {
         cx.spawn(async move |this, cx| {
             while rx.changed().await.is_ok() {
                 let state = rx.borrow().clone();
+                log::debug!("root_view: received device state, port={:?}", state.port);
                 let title = state
                     .port
                     .as_deref()

@@ -113,9 +113,7 @@ pub fn find_port() -> Option<String> {
         .ok()?
         .into_iter()
         .find_map(|p| match p.port_type {
-            serialport::SerialPortType::UsbPort(_) | serialport::SerialPortType::Unknown => {
-                Some(p.port_name)
-            }
+            serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
             _ => None,
         })
 }
@@ -135,6 +133,7 @@ pub fn poll(
     let mut state = DeviceState::default();
     loop {
         let Some(port_name) = find_port() else {
+            log::debug!("scanning: no candidate port");
             if state.port.is_some() {
                 state = DeviceState::default();
                 tx.send(state.clone()).ok();
@@ -142,6 +141,7 @@ pub fn poll(
             std::thread::sleep(Duration::from_secs(3));
             continue;
         };
+        log::debug!("scanning: candidate port {port_name}");
 
         let maybe_conn = (|| {
             let mut conn = Connection::open(&port_name).ok()?;
@@ -149,10 +149,12 @@ pub fn poll(
         })();
 
         let Some(mut conn) = maybe_conn else {
+            log::debug!("scanning: {port_name} did not respond to ping, retrying");
             std::thread::sleep(Duration::from_secs(1));
             continue;
         };
 
+        log::info!("connected to {port_name}");
         state = DeviceState {
             port: Some(port_name),
             ..Default::default()
