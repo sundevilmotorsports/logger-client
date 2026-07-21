@@ -1,4 +1,4 @@
-use warpui::{Element, fonts::FamilyId};
+use gpui::AnyElement;
 
 use super::placeholder;
 
@@ -6,7 +6,7 @@ use super::placeholder;
 pub struct LogsTab;
 
 impl LogsTab {
-    pub fn render(&self, font: FamilyId) -> Box<dyn Element> {
-        placeholder(font, "no logs yet")
+    pub fn render(&self) -> AnyElement {
+        placeholder("no logs yet")
     }
 }
