@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use serde::Serialize;
@@ -14,6 +14,12 @@ pub enum Command {
     Frames,
     Uptime,
     Gps,
+    ListLogs,
+    LogChunk { name: String, offset: u64 },
+    LogStatus,
+    SetLogging { active: bool },
+    NextLog,
+    Reboot,
 }
 
 #[derive(Debug)]
@@ -25,6 +31,12 @@ pub enum Response {
     Frames(Vec<serde_json::Value>),
     Uptime { uptime_seconds: u64 },
     Gps(GpsFix),
+    Logs(Vec<LogEntry>),
+    LogChunk { data: String, eof: bool },
+    LogStatus { active: bool, current: String },
+    SetLoggingOk,
+    NextLogOk,
+    RebootOk,
 }
 
 #[derive(Debug, Clone)]
@@ -33,6 +45,12 @@ pub struct GpsFix {
     pub lon: f64,
     pub alt_m: f64,
     pub sats: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub name: String,
+    pub size: u64,
 }
 
 struct Connection {
@@ -93,11 +111,103 @@ impl Connection {
                 alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
                 sats: data["sats"].as_u64().unwrap_or(0),
             }),
+            Command::ListLogs => Response::Logs(
+                data.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| {
+                        Some(LogEntry {
+                            name: e["name"].as_str()?.to_string(),
+                            size: e["size"].as_u64()?,
+                        })
+                    })
+                    .collect(),
+            ),
+            Command::LogChunk { .. } => Response::LogChunk {
+                data: data["data"].as_str().unwrap_or_default().to_string(),
+                eof: data["eof"].as_bool().unwrap_or(true),
+            },
+            Command::LogStatus => Response::LogStatus {
+                active: data["active"].as_bool().unwrap_or(false),
+                current: data["current"].as_str().unwrap_or_default().to_string(),
+            },
+            Command::SetLogging { .. } => Response::SetLoggingOk,
+            Command::NextLog => Response::NextLogOk,
+            Command::Reboot => Response::RebootOk,
         })
     }
 }
 
 pub type RequestTx = tokio::sync::mpsc::UnboundedSender<Command>;
+
+/// A command paired with a place to send its specific reply, unlike
+/// `RequestTx` which is fire-and-forget (its results surface later via
+/// `DeviceState`). Used for on-demand requests like log listing/download
+/// that need their own response instead of the broadcast poll state.
+pub struct LogRequest {
+    pub cmd: Command,
+    pub reply: tokio::sync::oneshot::Sender<anyhow::Result<Response>>,
+}
+
+pub type LogRequestTx = tokio::sync::mpsc::UnboundedSender<LogRequest>;
+
+async fn request(log_tx: &LogRequestTx, cmd: Command) -> anyhow::Result<Response> {
+    let (reply, rx) = tokio::sync::oneshot::channel();
+    log_tx
+        .send(LogRequest { cmd, reply })
+        .map_err(|_| anyhow!("device thread gone"))?;
+    rx.await.map_err(|_| anyhow!("device thread dropped the reply"))?
+}
+
+pub async fn list_logs(log_tx: &LogRequestTx) -> anyhow::Result<Vec<LogEntry>> {
+    match request(log_tx, Command::ListLogs).await? {
+        Response::Logs(entries) => Ok(entries),
+        other => Err(anyhow!("unexpected response to list_logs: {other:?}")),
+    }
+}
+
+const CHUNK_RETRIES: u32 = 3;
+
+/// Downloads `name` in full, requesting successive chunks until the device
+/// reports end-of-file. Each chunk gets a few retries — a multi-hundred-chunk
+/// download shouldn't abort over one transient serial hiccup.
+pub async fn download_log(
+    log_tx: &LogRequestTx,
+    name: &str,
+    mut on_progress: impl FnMut(u64),
+) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    loop {
+        let offset = bytes.len() as u64;
+        let cmd = Command::LogChunk {
+            name: name.to_string(),
+            offset,
+        };
+
+        let mut attempt = 0;
+        let response = loop {
+            match request(log_tx, cmd.clone()).await {
+                Ok(response) => break response,
+                Err(e) if attempt < CHUNK_RETRIES => {
+                    attempt += 1;
+                    log::warn!("log_chunk offset={offset} failed ({e}), retry {attempt}");
+                }
+                Err(e) => return Err(e),
+            }
+        };
+
+        match response {
+            Response::LogChunk { data, eof } => {
+                bytes.extend_from_slice(data.as_bytes());
+                on_progress(bytes.len() as u64);
+                if eof {
+                    return Ok(bytes);
+                }
+            }
+            other => return Err(anyhow!("unexpected response to log_chunk: {other:?}")),
+        }
+    }
+}
 
 pub fn find_port() -> Option<String> {
     serialport::available_ports()
@@ -115,11 +225,14 @@ pub struct DeviceState {
     pub uptime: Option<u64>,
     pub last_ping: Option<bool>,
     pub gps: Option<GpsFix>,
+    pub logging_active: Option<bool>,
+    pub current_log: Option<String>,
 }
 
 pub fn poll(
     tx: tokio::sync::watch::Sender<DeviceState>,
     mut req_rx: tokio::sync::mpsc::UnboundedReceiver<Command>,
+    mut log_rx: tokio::sync::mpsc::UnboundedReceiver<LogRequest>,
 ) {
     let mut state = DeviceState::default();
     loop {
@@ -152,6 +265,10 @@ pub fn poll(
         };
         tx.send(state.clone()).ok();
 
+        // Due immediately so the first loop iteration fetches uptime/gps/log
+        // status right away, same as before this was rate-limited.
+        let mut last_heartbeat = Instant::now() - Duration::from_secs(1);
+
         loop {
             while let Ok(cmd) = req_rx.try_recv() {
                 match cmd {
@@ -159,27 +276,52 @@ pub fn poll(
                         state.last_ping = Some(conn.request(Command::Ping).is_ok());
                         tx.send(state.clone()).ok();
                     }
+                    Command::SetLogging { .. } | Command::NextLog | Command::Reboot => {
+                        if let Err(e) = conn.request(cmd) {
+                            log::warn!("device control command failed: {e}");
+                        }
+                    }
                     _ => log::warn!("unhandled command: {cmd:?}"),
                 }
             }
 
-            match conn.request(Command::Uptime) {
-                Ok(Response::Uptime { uptime_seconds }) => {
-                    state.uptime = Some(uptime_seconds);
-                    state.gps = match conn.request(Command::Gps) {
-                        Ok(Response::Gps(fix)) => Some(fix),
-                        _ => None,
-                    };
-                    if tx.send(state.clone()).is_err() {
-                        return;
+            // Chunk requests are drained every loop tick (below), not gated
+            // behind the once-a-second heartbeat, so a multi-chunk download
+            // isn't throttled to ~1 chunk/sec.
+            while let Ok(req) = log_rx.try_recv() {
+                req.reply.send(conn.request(req.cmd)).ok();
+            }
+
+            if last_heartbeat.elapsed() >= Duration::from_secs(1) {
+                last_heartbeat = Instant::now();
+                match conn.request(Command::Uptime) {
+                    Ok(Response::Uptime { uptime_seconds }) => {
+                        state.uptime = Some(uptime_seconds);
+                        state.gps = match conn.request(Command::Gps) {
+                            Ok(Response::Gps(fix)) => Some(fix),
+                            _ => None,
+                        };
+                        match conn.request(Command::LogStatus) {
+                            Ok(Response::LogStatus { active, current }) => {
+                                state.logging_active = Some(active);
+                                state.current_log = Some(current);
+                            }
+                            _ => {
+                                state.logging_active = None;
+                                state.current_log = None;
+                            }
+                        }
+                        if tx.send(state.clone()).is_err() {
+                            return;
+                        }
+                    }
+                    other => {
+                        log::warn!("uptime: {other:?}");
+                        break;
                     }
                 }
-                other => {
-                    log::warn!("uptime: {other:?}");
-                    break;
-                }
             }
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(50));
         }
 
         state = DeviceState::default();

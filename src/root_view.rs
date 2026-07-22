@@ -5,15 +5,16 @@ use gpui::{
 
 use crate::device::{self, DeviceState};
 use crate::tabs::{ConfigurationTab, HomeTab, LogsTab, Tab};
-use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET};
+use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
 
 pub struct RootView {
     state: DeviceState,
     req_tx: device::RequestTx,
+    log_tx: device::LogRequestTx,
     selected_tab: Tab,
     focus_handle: FocusHandle,
     home_tab: HomeTab,
-    logs_tab: LogsTab,
+    pub(crate) logs_tab: LogsTab,
     configuration_tab: ConfigurationTab,
 }
 
@@ -21,7 +22,8 @@ impl RootView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, mut rx) = tokio::sync::watch::channel(DeviceState::default());
         let (req_tx, req_rx) = tokio::sync::mpsc::unbounded_channel();
-        std::thread::spawn(move || device::poll(tx, req_rx));
+        let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn(move || device::poll(tx, req_rx, log_rx));
 
         let window_handle: AnyWindowHandle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -57,6 +59,7 @@ impl RootView {
         Self {
             state: DeviceState::default(),
             req_tx,
+            log_tx,
             selected_tab: Tab::Home,
             focus_handle,
             home_tab: HomeTab::default(),
@@ -106,6 +109,23 @@ impl RootView {
         row
     }
 
+    fn restart_button(&self) -> impl IntoElement {
+        let req_tx = self.req_tx.clone();
+        div()
+            .id("restart-button")
+            .py(px(6.))
+            .px(px(4.))
+            .font(theme::mono_font())
+            .text_size(px(theme::FONT_SIZE))
+            .text_color(theme::muted())
+            .hover(|s| s.text_color(theme::red()))
+            .cursor_pointer()
+            .child("[ restart ]")
+            .on_click(move |_, _, _| {
+                let _ = req_tx.send(device::Command::Reboot);
+            })
+    }
+
     /// A full-width strip behind the tabs, colored differently from the body.
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -122,6 +142,13 @@ impl RootView {
                     .left(px(TITLEBAR_LEFT_INSET))
                     .child(self.tab_bar(cx)),
             )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right(px(TITLEBAR_RIGHT_INSET))
+                    .child(self.restart_button()),
+            )
     }
 }
 
@@ -135,7 +162,9 @@ impl Render for RootView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.selected_tab {
             Tab::Home => self.home_tab.render(&self.state, &self.req_tx),
-            Tab::Logs => self.logs_tab.render(),
+            Tab::Logs => self
+                .logs_tab
+                .render(&self.state, &self.req_tx, &self.log_tx, cx),
             Tab::Configuration => self.configuration_tab.render(),
         };
 
