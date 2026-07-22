@@ -142,6 +142,25 @@ impl RootView {
         row
     }
 
+    fn status_indicator(&self) -> impl IntoElement {
+        let connected = self.state.port.is_some();
+        let (color, label) = if connected {
+            (theme::green(), "connected")
+        } else {
+            (theme::muted(), "disconnected")
+        };
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.))
+            .font(theme::mono_font())
+            .text_size(px(theme::FONT_SIZE))
+            .child(div().text_color(color).child("●"))
+            .child(div().text_color(theme::muted()).child(label))
+    }
+
     fn restart_button(&self) -> impl IntoElement {
         let req_tx = self.req_tx.clone();
         div()
@@ -180,6 +199,11 @@ impl RootView {
                     .absolute()
                     .top_0()
                     .right(px(TITLEBAR_RIGHT_INSET))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(16.))
+                    .child(self.status_indicator())
                     .child(self.restart_button()),
             )
     }
