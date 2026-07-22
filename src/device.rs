@@ -32,7 +32,7 @@ pub enum Response {
     Uptime { uptime_seconds: u64 },
     Gps(GpsFix),
     Logs(Vec<LogEntry>),
-    LogChunk { data: String, eof: bool },
+    LogChunk { data: Vec<u8>, eof: bool },
     LogStatus { active: bool, current: String },
     SetLoggingOk,
     NextLogOk,
@@ -51,6 +51,16 @@ pub struct GpsFix {
 pub struct LogEntry {
     pub name: String,
     pub size: u64,
+}
+
+fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return Err(anyhow!("odd-length hex string"));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| anyhow!("bad hex: {e}")))
+        .collect()
 }
 
 struct Connection {
@@ -133,7 +143,7 @@ impl Connection {
                     .collect(),
             ),
             Command::LogChunk { .. } => Response::LogChunk {
-                data: data["data"].as_str().unwrap_or_default().to_string(),
+                data: hex_decode(data["data"].as_str().unwrap_or_default())?, // binary, hex-encoded
                 eof: data["eof"].as_bool().unwrap_or(true),
             },
             Command::LogStatus => Response::LogStatus {
@@ -207,7 +217,7 @@ pub async fn download_log(
 
         match response {
             Response::LogChunk { data, eof } => {
-                bytes.extend_from_slice(data.as_bytes());
+                bytes.extend_from_slice(&data);
                 on_progress(bytes.len() as u64);
                 if eof {
                     return Ok(bytes);

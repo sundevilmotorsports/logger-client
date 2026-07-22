@@ -22,16 +22,8 @@ enum Status {
     Error(String),
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Action {
-    Download,
-    Parse,
-}
-
-/// A download/parse job currently in flight for one log.
 struct Busy {
     name: String,
-    action: Action,
     downloaded: u64,
     total: u64,
 }
@@ -177,45 +169,57 @@ impl LogsTab {
         };
 
         let busy = self.busy.as_ref().filter(|b| b.name == entry.name);
-        let download_label = match busy {
-            Some(b) if b.action == Action::Download => "[ downloading... ]",
-            _ => "[ download ]",
+        let label = if busy.is_some() {
+            "[ working... ]"
+        } else {
+            "[ get ]"
         };
-        let parse_label = match busy {
-            Some(b) if b.action == Action::Parse => "[ parsing... ]",
-            _ => "[ parse ]",
-        };
+
+        let log_tx = log_tx.clone();
+        let name = entry.name.clone();
+        let total = entry.size;
+        let get_btn = div()
+            .id(("logs-get", idx))
+            .text_color(theme::muted())
+            .hover(|s| s.text_color(theme::fg()))
+            .cursor_pointer()
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.logs_tab.busy.is_some() {
+                    return;
+                }
+                this.logs_tab.busy = Some(Busy {
+                    name: name.clone(),
+                    downloaded: 0,
+                    total,
+                });
+                this.logs_tab.last_result = None;
+                cx.notify();
+
+                let log_tx = log_tx.clone();
+                let name = name.clone();
+                cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
+                    .detach();
+            }));
 
         let row = div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(12.))
-            .child(div().text_color(name_color).w(px(180.)).child(entry.name.clone()))
+            .child(
+                div()
+                    .text_color(name_color)
+                    .w(px(180.))
+                    .child(entry.name.clone()),
+            )
             .child(
                 div()
                     .text_color(theme::muted())
                     .w(px(64.))
                     .child(format_size(entry.size)),
             )
-            .child(self.action_button(
-                ("logs-dl", idx),
-                download_label,
-                entry.name.clone(),
-                entry.size,
-                Action::Download,
-                log_tx,
-                cx,
-            ))
-            .child(self.action_button(
-                ("logs-parse", idx),
-                parse_label,
-                entry.name.clone(),
-                entry.size,
-                Action::Parse,
-                log_tx,
-                cx,
-            ));
+            .child(get_btn);
 
         match busy {
             Some(b) => div()
@@ -228,53 +232,9 @@ impl LogsTab {
             None => row.into_any_element(),
         }
     }
-
-    fn action_button(
-        &self,
-        id: impl Into<gpui::ElementId>,
-        label: &'static str,
-        name: String,
-        total: u64,
-        action: Action,
-        log_tx: &device::LogRequestTx,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
-        let log_tx = log_tx.clone();
-        div()
-            .id(id)
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.logs_tab.busy.is_some() {
-                    return;
-                }
-                this.logs_tab.busy = Some(Busy {
-                    name: name.clone(),
-                    action,
-                    downloaded: 0,
-                    total,
-                });
-                this.logs_tab.last_result = None;
-                cx.notify();
-
-                let log_tx = log_tx.clone();
-                let name = name.clone();
-                cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name, action).await)
-                    .detach();
-            }))
-            .into_any_element()
-    }
 }
 
-async fn run_job(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    name: String,
-    action: Action,
-) {
+async fn run_job(weak: WeakEntity<RootView>, cx: &mut AsyncApp, log_tx: device::LogRequestTx, name: String) {
     let progress_weak = weak.clone();
     let mut progress_cx = cx.clone();
     let on_progress = move |downloaded: u64| {
@@ -288,7 +248,7 @@ async fn run_job(
             .ok();
     };
 
-    let result = run_job_inner(cx, &log_tx, &name, action, on_progress).await;
+    let result = run_job_inner(cx, &log_tx, &name, on_progress).await;
     weak.update(cx, |view, cx| {
         let tab = &mut view.logs_tab;
         tab.busy = None;
@@ -298,44 +258,29 @@ async fn run_job(
     .ok();
 }
 
-/// Downloads the raw log to a temp file, then for `Action::Parse` reads it
-/// back and extracts it into clean CSV before prompting where to save.
 async fn run_job_inner(
     cx: &mut AsyncApp,
     log_tx: &device::LogRequestTx,
     name: &str,
-    action: Action,
     on_progress: impl FnMut(u64),
 ) -> anyhow::Result<String> {
+    let csv_name = format!("{}.csv", name.trim_end_matches(".bin"));
+    let Some(dest) = prompt_save(cx, &csv_name).await? else {
+        return Ok("cancelled".to_string());
+    };
+
     let raw = device::download_log(log_tx, name, on_progress).await?;
     let tmp_path = std::env::temp_dir().join(name);
     std::fs::write(&tmp_path, &raw)?;
 
-    match action {
-        Action::Download => {
-            let Some(dest) = prompt_save(cx, name).await? else {
-                return Ok("cancelled".to_string());
-            };
-            std::fs::copy(&tmp_path, &dest)?;
-            Ok(format!("saved {} bytes to {}", raw.len(), dest.display()))
-        }
-        Action::Parse => {
-            let staged = std::fs::read(&tmp_path)?;
-            let parsed = log_parse::parse_csv(&staged)?;
+    let parsed = log_parse::parse_log(&raw)?;
+    std::fs::write(&dest, log_parse::to_csv(&parsed))?;
 
-            let csv_name = format!("{}.csv", name.trim_end_matches(".bin"));
-            let Some(dest) = prompt_save(cx, &csv_name).await? else {
-                return Ok("cancelled".to_string());
-            };
-            std::fs::write(&dest, log_parse::to_csv(&parsed))?;
-            Ok(format!(
-                "parsed {} row(s), {} malformed, saved to {}",
-                parsed.rows.len(),
-                parsed.malformed,
-                dest.display()
-            ))
-        }
-    }
+    Ok(format!(
+        "parsed {} row(s), saved to {}",
+        parsed.rows.len(),
+        dest.display()
+    ))
 }
 
 async fn prompt_save(cx: &mut AsyncApp, suggested_name: &str) -> anyhow::Result<Option<PathBuf>> {
