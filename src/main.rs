@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::borrow::Cow;
 pub mod device;
+pub mod log_parse;
 pub mod root_view;
 pub mod tabs;
 pub mod theme;

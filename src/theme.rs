@@ -39,3 +39,4 @@ pub const LABEL_COL: usize = 10;
 
 pub const TITLEBAR_HEIGHT: f32 = 32.;
 pub const TITLEBAR_LEFT_INSET: f32 = 24.;
+pub const TITLEBAR_RIGHT_INSET: f32 = 24.;
