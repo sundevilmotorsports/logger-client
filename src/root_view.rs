@@ -16,6 +16,7 @@ pub struct RootView {
     home_tab: HomeTab,
     pub(crate) logs_tab: LogsTab,
     configuration_tab: ConfigurationTab,
+    logs_poll: Option<gpui::Task<()>>,
 }
 
 impl RootView {
@@ -65,7 +66,38 @@ impl RootView {
             home_tab: HomeTab::default(),
             logs_tab: LogsTab::default(),
             configuration_tab: ConfigurationTab::default(),
+            logs_poll: None,
         }
+    }
+
+    /// Keeps `logs_tab.entries` fresh once a second while the Logs tab is open;
+    /// dropping the task (by setting it to `None`) cancels the loop.
+    fn sync_logs_poll(&mut self, cx: &mut Context<Self>) {
+        if self.selected_tab != Tab::Logs {
+            self.logs_poll = None;
+            return;
+        }
+        if self.logs_poll.is_some() {
+            return;
+        }
+        let log_tx = self.log_tx.clone();
+        self.logs_poll = Some(cx.spawn(async move |weak, cx| loop {
+            let result = device::list_logs(&log_tx).await;
+            let alive = weak
+                .update(cx, |view, cx| {
+                    if let Ok(entries) = result {
+                        view.logs_tab.set_entries(entries);
+                        cx.notify();
+                    }
+                })
+                .is_ok();
+            if !alive {
+                return;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+        }));
     }
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -101,6 +133,7 @@ impl RootView {
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_tab = tab;
+                        this.sync_logs_poll(cx);
                         cx.notify();
                     })),
             );

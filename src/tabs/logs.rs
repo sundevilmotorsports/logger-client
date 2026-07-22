@@ -29,6 +29,11 @@ struct Busy {
 }
 
 impl LogsTab {
+    /// Used by the periodic background poll (see `RootView::sync_logs_poll`).
+    pub(crate) fn set_entries(&mut self, entries: Vec<device::LogEntry>) {
+        self.entries = entries;
+    }
+
     pub fn render(
         &self,
         state: &DeviceState,
