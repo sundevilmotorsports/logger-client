@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -43,7 +43,7 @@ pub enum Response {
     RebootOk,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ImuReading {
     pub accel_g: [f32; 3],
     pub gyro_dps: [f32; 3],
@@ -51,7 +51,8 @@ pub struct ImuReading {
     pub mag_ut: [f32; 3],
 }
 
-#[derive(Debug, Clone)]
+/// Extra fields the firmware sends (`quality`, `utc`) are simply ignored.
+#[derive(Debug, Clone, Deserialize)]
 pub struct GpsFix {
     pub lat: f64,
     pub lon: f64,
@@ -59,7 +60,7 @@ pub struct GpsFix {
     pub sats: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LogEntry {
     pub name: String,
     pub size: u64,
@@ -138,54 +139,17 @@ impl Connection {
                     .as_u64()
                     .ok_or_else(|| anyhow!("missing uptime_seconds in: {data}"))?,
             },
-            Command::Gps => Response::Gps(GpsFix {
-                lat: data["lat"]
-                    .as_f64()
-                    .ok_or_else(|| anyhow!("missing lat in: {data}"))?,
-                lon: data["lon"]
-                    .as_f64()
-                    .ok_or_else(|| anyhow!("missing lon in: {data}"))?,
-                alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
-                sats: data["sats"].as_u64().unwrap_or(0),
-            }),
-            Command::Imu => Response::Imu(ImuReading {
-                accel_g: data["accel_g"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
-                    .collect::<Vec<f32>>()
-                    .try_into()
-                    .unwrap(),
-                gyro_dps: data["gyro_dps"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
-                    .collect::<Vec<f32>>()
-                    .try_into()
-                    .unwrap(),
-                temp_c: data["temp_c"].as_f64().unwrap() as f32,
-                mag_ut: data["mag_ut"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
-                    .collect::<Vec<f32>>()
-                    .try_into()
-                    .unwrap(),
-            }),
+            Command::Gps => Response::Gps(
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad gps data ({e}): {data}"))?,
+            ),
+            Command::Imu => Response::Imu(
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad imu data ({e}): {data}"))?,
+            ),
             Command::ListLogs => Response::Logs(
-                data.as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|e| {
-                        Some(LogEntry {
-                            name: e["name"].as_str()?.to_string(),
-                            size: e["size"].as_u64()?,
-                        })
-                    })
-                    .collect(),
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad log list ({e}): {data}"))?,
             ),
             Command::LogChunk { .. } => Response::LogChunk {
                 data: hex_decode(data["data"].as_str().unwrap_or_default())?, // binary, hex-encoded
