@@ -15,6 +15,7 @@ pub enum Command {
     Frames,
     Uptime,
     Gps,
+    Imu,
     ListLogs,
     LogChunk { name: String, offset: u64 },
     LogStatus,
@@ -33,12 +34,21 @@ pub enum Response {
     Frames(Vec<serde_json::Value>),
     Uptime { uptime_seconds: u64 },
     Gps(GpsFix),
+    Imu(ImuReading),
     Logs(Vec<LogEntry>),
     LogChunk { data: Vec<u8>, eof: bool },
     LogStatus { active: bool, current: String },
     SetLoggingOk,
     NextLogOk,
     RebootOk,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImuReading {
+    pub accel_g: [f32; 3],
+    pub gyro_dps: [f32; 3],
+    pub temp_c: f32,
+    pub mag_ut: [f32; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +148,33 @@ impl Connection {
                 alt_m: data["alt_m"].as_f64().unwrap_or(0.0),
                 sats: data["sats"].as_u64().unwrap_or(0),
             }),
+            Command::Imu => Response::Imu(ImuReading {
+                accel_g: data["accel_g"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
+                    .collect::<Vec<f32>>()
+                    .try_into()
+                    .unwrap(),
+                gyro_dps: data["gyro_dps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
+                    .collect::<Vec<f32>>()
+                    .try_into()
+                    .unwrap(),
+                temp_c: data["temp_c"].as_f64().unwrap() as f32,
+                mag_ut: data["mag_ut"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| Some(e.as_f64().unwrap() as f32))
+                    .collect::<Vec<f32>>()
+                    .try_into()
+                    .unwrap(),
+            }),
             Command::ListLogs => Response::Logs(
                 data.as_array()
                     .into_iter()
@@ -183,7 +220,8 @@ async fn request(log_tx: &LogRequestTx, cmd: Command) -> anyhow::Result<Response
     log_tx
         .send(LogRequest { cmd, reply })
         .map_err(|_| anyhow!("device thread gone"))?;
-    rx.await.map_err(|_| anyhow!("device thread dropped the reply"))?
+    rx.await
+        .map_err(|_| anyhow!("device thread dropped the reply"))?
 }
 
 pub async fn list_logs(log_tx: &LogRequestTx) -> anyhow::Result<Vec<LogEntry>> {
@@ -266,6 +304,7 @@ pub struct DeviceState {
     pub uptime: Option<u64>,
     pub last_ping: Option<bool>,
     pub gps: Option<GpsFix>,
+    pub imu: Option<ImuReading>,
     pub logging_active: Option<bool>,
     pub current_log: Option<String>,
 }
@@ -348,6 +387,10 @@ pub fn poll(
                         state.uptime = Some(uptime_seconds);
                         state.gps = match conn.request(Command::Gps) {
                             Ok(Response::Gps(fix)) => Some(fix),
+                            _ => None,
+                        };
+                        state.imu = match conn.request(Command::Imu) {
+                            Ok(Response::Imu(reading)) => Some(reading),
                             _ => None,
                         };
                         match conn.request(Command::LogStatus) {

@@ -52,6 +52,24 @@ impl HomeTab {
             ),
             None => ("no fix".to_string(), theme::muted()),
         };
+
+        let (imu_str, imu_color) = match &state.imu {
+            Some(i) => (
+                format!(
+                    "{:.2}x {:.2}y {:.2}z, {:.1}c, mag {:.1}/{:.1}/{:.1}uT",
+                    i.accel_g[0],
+                    i.accel_g[1],
+                    i.accel_g[2],
+                    i.temp_c,
+                    i.mag_ut[0],
+                    i.mag_ut[1],
+                    i.mag_ut[2]
+                ),
+                theme::green(),
+            ),
+            None => ("no imu".to_string(), theme::muted()),
+        };
+
         let (ping_str, ping_color) = match state.last_ping {
             Some(true) => ("ok", theme::green()),
             Some(false) => ("error", theme::red()),
@@ -80,6 +98,7 @@ impl HomeTab {
             .child(self.row("port", port, theme::fg()))
             .child(self.row("uptime", &uptime, theme::fg()))
             .child(self.row("gps", &gps_str, gps_color))
+            .child(self.row("imu", &imu_str, imu_color))
             .child(div().h(gpui::px(FONT_SIZE)))
             .child(
                 div()
