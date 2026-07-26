@@ -251,12 +251,19 @@ fn usb_speed_mbps(_port_name: &str) -> Option<String> {
     None
 }
 
+const ESPRESSIF_VID: u16 = 0x303a;
+const ROM_DOWNLOAD_PID: u16 = 0x1001;
+
 pub fn find_port() -> Option<String> {
     serialport::available_ports()
         .ok()?
         .into_iter()
         .find_map(|p| match p.port_type {
-            serialport::SerialPortType::UsbPort(_) => Some(p.port_name),
+            serialport::SerialPortType::UsbPort(info)
+                if info.vid == ESPRESSIF_VID && info.pid != ROM_DOWNLOAD_PID =>
+            {
+                Some(p.port_name)
+            }
             _ => None,
         })
 }
