@@ -8,6 +8,7 @@ use serde::Serialize;
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
     Ping,
+    Version,
     Status,
     GetConfig,
     SetConfig { args: serde_json::Value },
@@ -25,6 +26,7 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Response {
     Pong,
+    Version { version: String },
     Status { config_loaded: bool },
     Config(serde_json::Value),
     SetConfigOk,
@@ -100,6 +102,12 @@ impl Connection {
 
         Ok(match cmd {
             Command::Ping => Response::Pong,
+            Command::Version => Response::Version {
+                version: data["version"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("missing version in: {data}"))?
+                    .to_string(),
+            },
             Command::Status => Response::Status {
                 config_loaded: data["config_loaded"].as_bool().unwrap_or(false),
             },
@@ -232,6 +240,7 @@ pub fn find_port() -> Option<String> {
 #[derive(Clone, Default)]
 pub struct DeviceState {
     pub port: Option<String>,
+    pub firmware_version: Option<String>,
     pub uptime: Option<u64>,
     pub last_ping: Option<bool>,
     pub gps: Option<GpsFix>,
@@ -271,6 +280,10 @@ pub fn poll(
         log::info!("connected to {port_name}");
         state = DeviceState {
             port: Some(port_name),
+            firmware_version: match conn.request(Command::Version) {
+                Ok(Response::Version { version }) => Some(version),
+                _ => None,
+            },
             ..Default::default()
         };
         tx.send(state.clone()).ok();

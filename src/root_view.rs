@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::device::{self, DeviceState};
-use crate::tabs::{ConfigurationTab, HomeTab, LogsTab, Tab};
+use crate::tabs::{ConfigurationTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
 
 pub struct RootView {
@@ -16,6 +16,7 @@ pub struct RootView {
     home_tab: HomeTab,
     pub(crate) logs_tab: LogsTab,
     configuration_tab: ConfigurationTab,
+    info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
 }
 
@@ -66,6 +67,7 @@ impl RootView {
             home_tab: HomeTab::default(),
             logs_tab: LogsTab::default(),
             configuration_tab: ConfigurationTab::default(),
+            info_tab: DeviceInfoTab::default(),
             logs_poll: None,
         }
     }
@@ -223,6 +225,7 @@ impl Render for RootView {
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
             Tab::Configuration => self.configuration_tab.render(),
+            Tab::Info => self.info_tab.render(&self.state),
         };
 
         let body = div()
