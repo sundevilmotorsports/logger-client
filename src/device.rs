@@ -236,6 +236,19 @@ pub async fn download_log(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn usb_speed_mbps(port_name: &str) -> Option<String> {
+    let tty_name = port_name.rsplit('/').next()?;
+    std::fs::read_to_string(format!("/sys/class/tty/{tty_name}/device/../speed"))
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn usb_speed_mbps(_port_name: &str) -> Option<String> {
+    None
+}
+
 pub fn find_port() -> Option<String> {
     serialport::available_ports()
         .ok()?
@@ -287,6 +300,10 @@ pub fn poll(
         };
 
         log::info!("connected to {port_name}");
+        match usb_speed_mbps(&port_name) {
+            Some(speed) => log::debug!("USB link speed: {speed} Mbit/s"),
+            None => log::debug!("USB link speed: unknown"),
+        }
         state = DeviceState {
             port: Some(port_name),
             firmware_version: match conn.request(Command::Version) {
