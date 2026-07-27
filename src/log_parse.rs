@@ -35,7 +35,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-pub fn parse_log(raw: &[u8]) -> anyhow::Result<ParsedLog> {
+pub fn parse_log(raw: &[u8], mut on_progress: impl FnMut(usize, usize)) -> anyhow::Result<ParsedLog> {
     let mut cur = Cursor { data: raw, pos: 0 };
 
     let num_cols = cur.take(1)?[0] as usize;
@@ -64,6 +64,9 @@ pub fn parse_log(raw: &[u8]) -> anyhow::Result<ParsedLog> {
         return Err(anyhow::anyhow!("log schema has no columns"));
     }
 
+    // Bounded to ~50 updates regardless of file size
+    let progress_interval = (cur.remaining() / row_width / 50).max(1);
+
     let mut rows = Vec::new();
     while cur.remaining() >= row_width {
         let mut row = Vec::with_capacity(num_cols);
@@ -83,7 +86,11 @@ pub fn parse_log(raw: &[u8]) -> anyhow::Result<ParsedLog> {
             row.push(value);
         }
         rows.push(row);
+        if rows.len() % progress_interval == 0 {
+            on_progress(cur.pos, raw.len());
+        }
     }
+    on_progress(cur.pos, raw.len());
 
     Ok(ParsedLog { columns, rows })
 }

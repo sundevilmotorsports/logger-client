@@ -1,5 +1,6 @@
 use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::device::{self, DeviceState};
 use crate::log_parse;
@@ -190,26 +191,28 @@ impl LogsTab {
     }
 }
 
+fn progress_callback(weak: WeakEntity<RootView>, mut cx: AsyncApp) -> impl FnMut(u64) {
+    move |downloaded: u64| {
+        weak.update(&mut cx, |view, cx| {
+            if let Some(busy) = &mut view.logs_tab.busy {
+                busy.downloaded = downloaded;
+            }
+            cx.notify();
+        })
+        .ok();
+    }
+}
+
 async fn run_job(
     weak: WeakEntity<RootView>,
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
     name: String,
 ) {
-    let progress_weak = weak.clone();
-    let mut progress_cx = cx.clone();
-    let on_progress = move |downloaded: u64| {
-        progress_weak
-            .update(&mut progress_cx, |view, cx| {
-                if let Some(busy) = &mut view.logs_tab.busy {
-                    busy.downloaded = downloaded;
-                }
-                cx.notify();
-            })
-            .ok();
-    };
+    let on_download_progress = progress_callback(weak.clone(), cx.clone());
+    let on_parse_progress = progress_callback(weak.clone(), cx.clone());
 
-    let result = run_job_inner(cx, &log_tx, &name, on_progress).await;
+    let result = run_job_inner(cx, &log_tx, &name, on_download_progress, on_parse_progress).await;
     weak.update(cx, |view, cx| {
         let tab = &mut view.logs_tab;
         tab.busy = None;
@@ -223,22 +226,37 @@ async fn run_job_inner(
     cx: &mut AsyncApp,
     log_tx: &device::LogRequestTx,
     name: &str,
-    on_progress: impl FnMut(u64),
+    on_download_progress: impl FnMut(u64),
+    mut on_parse_progress: impl FnMut(u64),
 ) -> anyhow::Result<String> {
     let csv_name = format!("{}.csv", name.trim_end_matches(".bin"));
     let Some(dest) = prompt_save(cx, &csv_name).await? else {
         return Ok("cancelled".to_string());
     };
 
-    let raw = device::download_log(log_tx, name, on_progress).await?;
+    let raw = device::download_log(log_tx, name, on_download_progress).await?;
     let tmp_path = std::env::temp_dir().join(name);
     std::fs::write(&tmp_path, &raw)?;
 
-    let parsed = log_parse::parse_log(&raw)?;
+    on_parse_progress(0);
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+    let parse_handle = std::thread::spawn(move || {
+        log_parse::parse_log(&raw, move |done, _total| {
+            let _ = progress_tx.send(done as u64);
+        })
+    });
+    while let Some(done) = progress_rx.recv().await {
+        on_parse_progress(done);
+        cx.background_executor().timer(Duration::from_millis(1)).await;
+    }
+    let parsed = parse_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("log parser thread panicked"))??;
+
     std::fs::write(&dest, log_parse::to_csv(&parsed))?;
 
     Ok(format!(
-        "parsed {} row(s), saved to {}",
+        "parsed {} rows, saved to {}",
         parsed.rows.len(),
         dest.display()
     ))
