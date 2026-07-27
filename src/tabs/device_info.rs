@@ -11,7 +11,7 @@ impl DeviceInfoTab {
         let version = state.firmware_version.as_deref().unwrap_or("—");
         let padded = format!("{:<width$}", "firmware", width = theme::LABEL_COL);
 
-        div()
+        theme::panel()
             .font(theme::mono_font())
             .text_size(gpui::px(FONT_SIZE))
             .flex()

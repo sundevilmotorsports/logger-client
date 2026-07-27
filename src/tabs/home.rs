@@ -70,44 +70,22 @@ impl HomeTab {
             None => ("no imu".to_string(), theme::muted()),
         };
 
-        let (ping_str, ping_color) = match state.last_ping {
-            Some(true) => ("ok", theme::green()),
-            Some(false) => ("error", theme::red()),
-            None => ("—", theme::muted()),
-        };
-
-        let req_tx = req_tx.clone();
-
-        let ping_btn = div()
-            .id("ping-button")
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child("[ ping ]")
-            .on_click(move |_, _, _| {
-                let _ = req_tx.send(device::Command::Ping);
-            });
-
         div()
             .font(theme::mono_font())
             .text_size(gpui::px(FONT_SIZE))
             .flex()
             .flex_col()
-            .gap(gpui::px(4.))
-            .child(self.row("status", status, status_color))
-            .child(self.row("port", port, theme::fg()))
-            .child(self.row("uptime", &uptime, theme::fg()))
-            .child(self.row("gps", &gps_str, gps_color))
-            .child(self.row("imu", &imu_str, imu_color))
-            .child(div().h(gpui::px(FONT_SIZE)))
+            .gap(gpui::px(12.))
             .child(
-                div()
+                theme::panel()
                     .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(gpui::px(8.))
-                    .child(ping_btn)
-                    .child(div().text_color(ping_color).child(ping_str)),
+                    .flex_col()
+                    .gap(gpui::px(6.))
+                    .child(self.row("status", status, status_color))
+                    .child(self.row("port", port, theme::fg()))
+                    .child(self.row("uptime", &uptime, theme::fg()))
+                    .child(self.row("gps", &gps_str, gps_color))
+                    .child(self.row("imu", &imu_str, imu_color)),
             )
             .into_any_element()
     }

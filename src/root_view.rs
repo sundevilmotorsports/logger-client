@@ -83,22 +83,24 @@ impl RootView {
             return;
         }
         let log_tx = self.log_tx.clone();
-        self.logs_poll = Some(cx.spawn(async move |weak, cx| loop {
-            let result = device::list_logs(&log_tx).await;
-            let alive = weak
-                .update(cx, |view, cx| {
-                    if let Ok(entries) = result {
-                        view.logs_tab.set_entries(entries);
-                        cx.notify();
-                    }
-                })
-                .is_ok();
-            if !alive {
-                return;
+        self.logs_poll = Some(cx.spawn(async move |weak, cx| {
+            loop {
+                let result = device::list_logs(&log_tx).await;
+                let alive = weak
+                    .update(cx, |view, cx| {
+                        if let Ok(entries) = result {
+                            view.logs_tab.set_entries(entries);
+                            cx.notify();
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
             }
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(1))
-                .await;
         }));
     }
 
@@ -107,32 +109,32 @@ impl RootView {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(24.))
+            .gap(px(20.))
+            .h(px(TITLEBAR_HEIGHT))
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE));
 
         for tab in Tab::ALL {
             let is_selected = tab == self.selected_tab;
-            let label = if is_selected {
-                format!("[{}]", tab.title())
+            let (color, underline) = if is_selected {
+                (theme::fg(), theme::accent())
             } else {
-                format!(" {} ", tab.title())
-            };
-            let color = if is_selected {
-                theme::fg()
-            } else {
-                theme::muted()
+                (theme::muted(), gpui::transparent_black())
             };
 
             row = row.child(
                 div()
                     .id(("tab", tab as usize))
-                    .py(px(6.))
+                    .h(px(TITLEBAR_HEIGHT))
                     .px(px(4.))
+                    .flex()
+                    .items_center()
+                    .border_b_2()
+                    .border_color(underline)
                     .text_color(color)
                     .hover(|s| s.text_color(theme::fg()))
                     .cursor_pointer()
-                    .child(label)
+                    .child(tab.title())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_tab = tab;
                         this.sync_logs_poll(cx);
@@ -165,16 +167,10 @@ impl RootView {
 
     fn restart_button(&self) -> impl IntoElement {
         let req_tx = self.req_tx.clone();
-        div()
-            .id("restart-button")
-            .py(px(6.))
-            .px(px(4.))
+        theme::button_base("restart-button", "restart")
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::red()))
-            .cursor_pointer()
-            .child("[ restart ]")
+            .hover(|s| s.text_color(theme::red()).border_color(theme::red()))
             .on_click(move |_, _, _| {
                 let _ = req_tx.send(device::Command::Reboot);
             })
@@ -189,6 +185,8 @@ impl RootView {
             .w_full()
             .h(px(TITLEBAR_HEIGHT))
             .bg(theme::titlebar_bg())
+            .border_b_1()
+            .border_color(theme::border())
             .child(
                 div()
                     .absolute()
@@ -201,6 +199,7 @@ impl RootView {
                     .absolute()
                     .top_0()
                     .right(px(TITLEBAR_RIGHT_INSET))
+                    .h(px(TITLEBAR_HEIGHT))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -229,7 +228,7 @@ impl Render for RootView {
         };
 
         let body = div()
-            .max_w(px(400.))
+            .max_w(px(640.))
             .pl(px(32.))
             .pr(px(32.))
             .pb(px(32.))

@@ -42,9 +42,7 @@ impl LogsTab {
         cx: &mut Context<RootView>,
     ) -> AnyElement {
         let (status_text, status_color) = match &self.status {
-            Status::Idle if self.entries.is_empty() => {
-                ("no logs yet — [ refresh ]".to_string(), theme::muted())
-            }
+            Status::Idle if self.entries.is_empty() => ("no logs yet".to_string(), theme::muted()),
             Status::Idle => (format!("{} log(s)", self.entries.len()), theme::muted()),
             Status::Loading => ("loading...".to_string(), theme::amber()),
             Status::Error(e) => (format!("error: {e}"), theme::red()),
@@ -84,73 +82,30 @@ impl LogsTab {
         status_color: gpui::Hsla,
         cx: &mut Context<RootView>,
     ) -> AnyElement {
-        let refresh_tx = log_tx.clone();
-        let refresh_btn = div()
-            .id("logs-refresh")
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child("[ refresh ]")
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.logs_tab.status = Status::Loading;
-                cx.notify();
-
-                let log_tx = refresh_tx.clone();
-                cx.spawn(async move |weak, cx| {
-                    let result = device::list_logs(&log_tx).await;
-                    weak.update(cx, |view, cx| {
-                        match result {
-                            Ok(entries) => {
-                                view.logs_tab.entries = entries;
-                                view.logs_tab.status = Status::Idle;
-                            }
-                            Err(e) => view.logs_tab.status = Status::Error(e.to_string()),
-                        }
-                        cx.notify();
-                    })
-                    .ok();
-                })
-                .detach();
-            }));
-
         let (pause_label, pause_active) = match state.logging_active {
-            Some(true) => ("[ pause ]", true),
-            Some(false) => ("[ resume ]", true),
-            None => ("[ pause ]", false),
+            Some(true) => ("pause", true),
+            Some(false) => ("resume", true),
+            None => ("pause", false),
         };
         let pause_tx = req_tx.clone();
         let resume = !matches!(state.logging_active, Some(true));
-        let pause_btn = div()
-            .id("logs-pause")
-            .text_color(if pause_active {
-                theme::muted()
-            } else {
-                theme::muted().opacity(0.4)
-            })
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child(pause_label)
-            .on_click(move |_, _, _| {
-                let _ = pause_tx.send(device::Command::SetLogging { active: resume });
-            });
+        let mut pause_btn = theme::button("logs-pause", pause_label).on_click(move |_, _, _| {
+            let _ = pause_tx.send(device::Command::SetLogging { active: resume });
+        });
+        if !pause_active {
+            pause_btn = pause_btn.text_color(theme::muted().opacity(0.4));
+        }
 
         let next_tx = req_tx.clone();
-        let next_btn = div()
-            .id("logs-next")
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child("[ new log ]")
-            .on_click(move |_, _, _| {
-                let _ = next_tx.send(device::Command::NextLog);
-            });
+        let next_btn = theme::button("logs-next", "new log").on_click(move |_, _, _| {
+            let _ = next_tx.send(device::Command::NextLog);
+        });
 
         div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(8.))
-            .child(refresh_btn)
             .child(pause_btn)
             .child(next_btn)
             .child(div().text_color(status_color).child(status_text))
@@ -174,22 +129,13 @@ impl LogsTab {
         };
 
         let busy = self.busy.as_ref().filter(|b| b.name == entry.name);
-        let label = if busy.is_some() {
-            "[ working... ]"
-        } else {
-            "[ get ]"
-        };
+        let label = if busy.is_some() { "working..." } else { "get" };
 
         let log_tx = log_tx.clone();
         let name = entry.name.clone();
         let total = entry.size;
-        let get_btn = div()
-            .id(("logs-get", idx))
-            .text_color(theme::muted())
-            .hover(|s| s.text_color(theme::fg()))
-            .cursor_pointer()
-            .child(label)
-            .on_click(cx.listener(move |this, _, _, cx| {
+        let get_btn =
+            theme::button(("logs-get", idx), label).on_click(cx.listener(move |this, _, _, cx| {
                 if this.logs_tab.busy.is_some() {
                     return;
                 }
@@ -208,10 +154,15 @@ impl LogsTab {
             }));
 
         let row = div()
+            .id(("logs-row", idx))
             .flex()
             .flex_row()
             .items_center()
             .gap(px(12.))
+            .px(px(8.))
+            .py(px(3.))
+            .rounded_sm()
+            .hover(|s| s.bg(theme::panel_bg()))
             .child(
                 div()
                     .text_color(name_color)
@@ -239,7 +190,12 @@ impl LogsTab {
     }
 }
 
-async fn run_job(weak: WeakEntity<RootView>, cx: &mut AsyncApp, log_tx: device::LogRequestTx, name: String) {
+async fn run_job(
+    weak: WeakEntity<RootView>,
+    cx: &mut AsyncApp,
+    log_tx: device::LogRequestTx,
+    name: String,
+) {
     let progress_weak = weak.clone();
     let mut progress_cx = cx.clone();
     let on_progress = move |downloaded: u64| {
@@ -306,8 +262,15 @@ fn progress_bar(downloaded: u64, total: u64) -> AnyElement {
     div()
         .w(px(WIDTH))
         .h(px(5.))
-        .bg(theme::muted())
-        .child(div().w(px(WIDTH * fraction)).h(px(5.)).bg(theme::green()))
+        .rounded_full()
+        .bg(theme::border())
+        .child(
+            div()
+                .w(px(WIDTH * fraction))
+                .h(px(5.))
+                .rounded_full()
+                .bg(theme::green()),
+        )
         .into_any_element()
 }
 

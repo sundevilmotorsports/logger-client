@@ -46,7 +46,11 @@ pub fn parse_log(raw: &[u8]) -> anyhow::Result<ParsedLog> {
         let name = String::from_utf8_lossy(cur.take(name_len)?).into_owned();
         let tag = cur.take(1)?[0];
         columns.push(name);
-        types.push(if tag == 0 { ColType::Float } else { ColType::Raw(tag) });
+        types.push(if tag == 0 {
+            ColType::Float
+        } else {
+            ColType::Raw(tag)
+        });
     }
 
     let row_width: usize = types
