@@ -35,7 +35,10 @@ impl<'a> Cursor<'a> {
     }
 }
 
-pub fn parse_log(raw: &[u8], mut on_progress: impl FnMut(usize, usize)) -> anyhow::Result<ParsedLog> {
+pub fn parse_log(
+    raw: &[u8],
+    mut on_progress: impl FnMut(usize, usize),
+) -> anyhow::Result<ParsedLog> {
     let mut cur = Cursor { data: raw, pos: 0 };
 
     let num_cols = cur.take(1)?[0] as usize;

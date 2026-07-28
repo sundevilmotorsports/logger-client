@@ -247,7 +247,9 @@ async fn run_job_inner(
     });
     while let Some(done) = progress_rx.recv().await {
         on_parse_progress(done);
-        cx.background_executor().timer(Duration::from_millis(1)).await;
+        cx.background_executor()
+            .timer(Duration::from_millis(1))
+            .await;
     }
     let parsed = parse_handle
         .join()

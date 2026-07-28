@@ -229,11 +229,14 @@ impl Render for RootView {
 
         let body = div()
             .max_w(px(640.))
+            .size_full()
+            .flex()
+            .flex_col()
             .pl(px(32.))
             .pr(px(32.))
             .pb(px(32.))
             .pt(px(TITLEBAR_HEIGHT + 24.))
-            .child(content);
+            .child(div().flex_1().min_h(px(0.)).child(content));
 
         div()
             .track_focus(&self.focus_handle)
