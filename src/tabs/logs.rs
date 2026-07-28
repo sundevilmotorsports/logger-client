@@ -52,7 +52,7 @@ impl LogsTab {
             Status::Error(e) => (format!("error: {e}"), theme::red()),
         };
 
-        let mut rows = div().flex().flex_col().gap(px(4.));
+        let mut rows = div().flex().flex_col().items_start().gap(px(4.));
         for (idx, entry) in self.entries.iter().enumerate() {
             rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
         }
