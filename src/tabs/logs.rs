@@ -31,7 +31,10 @@ struct Busy {
 
 impl LogsTab {
     /// Used by the periodic background poll (see `RootView::sync_logs_poll`).
-    pub(crate) fn set_entries(&mut self, entries: Vec<device::LogEntry>) {
+    /// Sorted newest first -- names are zero-padded ("0001.bin", "0002.bin",
+    /// ...) so a plain string sort already puts them in numeric order.
+    pub(crate) fn set_entries(&mut self, mut entries: Vec<device::LogEntry>) {
+        entries.sort_by(|a, b| b.name.cmp(&a.name));
         self.entries = entries;
     }
 
@@ -57,11 +60,19 @@ impl LogsTab {
         let mut root = div()
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
+            .size_full()
             .flex()
             .flex_col()
             .gap(px(8.))
             .child(self.toolbar(state, req_tx, log_tx, status_text, status_color, cx))
-            .child(rows);
+            .child(
+                div()
+                    .id("logs-scroll")
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h(px(0.))
+                    .child(rows),
+            );
 
         if let Some(result) = &self.last_result {
             let (msg, color) = match result {
