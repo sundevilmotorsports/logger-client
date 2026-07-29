@@ -179,7 +179,7 @@ pub struct LogRequest {
 
 pub type LogRequestTx = tokio::sync::mpsc::UnboundedSender<LogRequest>;
 
-async fn request(log_tx: &LogRequestTx, cmd: Command) -> anyhow::Result<Response> {
+pub async fn request(log_tx: &LogRequestTx, cmd: Command) -> anyhow::Result<Response> {
     let (reply, rx) = tokio::sync::oneshot::channel();
     log_tx
         .send(LogRequest { cmd, reply })

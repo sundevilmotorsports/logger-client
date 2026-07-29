@@ -1,11 +1,15 @@
 use gpui::{
-    AnyWindowHandle, App, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
-    Window, div, prelude::*, px,
+    AnyWindowHandle, App, AsyncApp, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    Render, WeakEntity, Window, div, prelude::*, px,
 };
+use std::time::Duration;
 
 use crate::device::{self, DeviceState};
 use crate::tabs::{ConfigurationTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
+use crate::toast::{self, Toast, ToastKind};
+
+const TOAST_LIFETIME: Duration = Duration::from_secs(4);
 
 pub struct RootView {
     state: DeviceState,
@@ -18,6 +22,8 @@ pub struct RootView {
     configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
+    toasts: Vec<(u64, Toast)>,
+    next_toast_id: u64,
 }
 
 impl RootView {
@@ -69,7 +75,26 @@ impl RootView {
             configuration_tab: ConfigurationTab::default(),
             info_tab: DeviceInfoTab::default(),
             logs_poll: None,
+            toasts: Vec::new(),
+            next_toast_id: 0,
         }
+    }
+
+    fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
+        let id = self.next_toast_id;
+        self.next_toast_id += 1;
+        self.toasts.push((id, Toast { message, kind }));
+        cx.notify();
+
+        cx.spawn(async move |weak, cx| {
+            cx.background_executor().timer(TOAST_LIFETIME).await;
+            weak.update(cx, |view, cx| {
+                view.toasts.retain(|(tid, _)| *tid != id);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Keeps `logs_tab.entries` fresh once a second while the Logs tab is open;
@@ -165,15 +190,19 @@ impl RootView {
             .child(div().text_color(theme::muted()).child(label))
     }
 
-    fn restart_button(&self) -> impl IntoElement {
-        let req_tx = self.req_tx.clone();
+    fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let log_tx = self.log_tx.clone();
         theme::button_base("restart-button", "restart")
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
             .hover(|s| s.text_color(theme::red()).border_color(theme::red()))
-            .on_click(move |_, _, _| {
-                let _ = req_tx.send(device::Command::Reboot);
-            })
+            .on_click(cx.listener(move |_, _, _, cx| {
+                let log_tx = log_tx.clone();
+                cx.spawn(async move |weak, cx| {
+                    run_command_toast(weak, cx, log_tx, device::Command::Reboot, "restart").await
+                })
+                .detach();
+            }))
     }
 
     /// A full-width strip behind the tabs, colored differently from the body.
@@ -205,9 +234,26 @@ impl RootView {
                     .items_center()
                     .gap(px(16.))
                     .child(self.status_indicator())
-                    .child(self.restart_button()),
+                    .child(self.restart_button(cx)),
             )
     }
+}
+
+/// Sends `cmd` and reports the result as a toast
+pub async fn run_command_toast(
+    weak: WeakEntity<RootView>,
+    cx: &mut AsyncApp,
+    log_tx: device::LogRequestTx,
+    cmd: device::Command,
+    label: &str,
+) {
+    let result = device::request(&log_tx, cmd).await;
+    let (message, kind) = match result {
+        Ok(_) => (label.to_string(), ToastKind::Success),
+        Err(e) => (format!("{label} failed: {e}"), ToastKind::Error),
+    };
+    weak.update(cx, |view, cx| view.push_toast(cx, message, kind))
+        .ok();
 }
 
 impl Focusable for RootView {
@@ -251,5 +297,6 @@ impl Render for RootView {
             .bg(theme::bg())
             .child(body)
             .child(self.title_bar(cx))
+            .child(toast::render(&self.toasts))
     }
 }

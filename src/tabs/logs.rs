@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::device::{self, DeviceState};
 use crate::log_parse;
-use crate::root_view::RootView;
+use crate::root_view::{self, RootView};
 use crate::theme;
 
 #[derive(Default)]
@@ -99,19 +99,44 @@ impl LogsTab {
             Some(false) => ("resume", true),
             None => ("pause", false),
         };
-        let pause_tx = req_tx.clone();
         let resume = !matches!(state.logging_active, Some(true));
-        let mut pause_btn = theme::button("logs-pause", pause_label).on_click(move |_, _, _| {
-            let _ = pause_tx.send(device::Command::SetLogging { active: resume });
-        });
+        let pause_log_tx = log_tx.clone();
+        let mut pause_btn =
+            theme::button("logs-pause", pause_label).on_click(cx.listener(move |_, _, _, cx| {
+                let log_tx = pause_log_tx.clone();
+                cx.spawn(async move |weak, cx| {
+                    let label = if resume { "resume" } else { "pause" };
+                    root_view::run_command_toast(
+                        weak,
+                        cx,
+                        log_tx,
+                        device::Command::SetLogging { active: resume },
+                        label,
+                    )
+                    .await
+                })
+                .detach();
+            }));
         if !pause_active {
             pause_btn = pause_btn.text_color(theme::muted().opacity(0.4));
         }
 
-        let next_tx = req_tx.clone();
-        let next_btn = theme::button("logs-next", "new log").on_click(move |_, _, _| {
-            let _ = next_tx.send(device::Command::NextLog);
-        });
+        let next_log_tx = log_tx.clone();
+        let next_btn =
+            theme::button("logs-next", "new log").on_click(cx.listener(move |_, _, _, cx| {
+                let log_tx = next_log_tx.clone();
+                cx.spawn(async move |weak, cx| {
+                    root_view::run_command_toast(
+                        weak,
+                        cx,
+                        log_tx,
+                        device::Command::NextLog,
+                        "new log",
+                    )
+                    .await
+                })
+                .detach();
+            }));
 
         div()
             .flex()
