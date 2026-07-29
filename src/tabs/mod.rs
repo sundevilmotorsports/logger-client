@@ -8,10 +8,6 @@ pub use device_info::DeviceInfoTab;
 pub use home::HomeTab;
 pub use logs::LogsTab;
 
-use gpui::{AnyElement, IntoElement, div, prelude::*};
-
-use crate::theme::{self, FONT_SIZE};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Home,
@@ -31,13 +27,4 @@ impl Tab {
             Tab::Info => "Info",
         }
     }
-}
-
-fn placeholder(text: &str) -> AnyElement {
-    div()
-        .font(theme::mono_font())
-        .text_size(gpui::px(FONT_SIZE))
-        .text_color(theme::muted())
-        .child(text.to_string())
-        .into_any_element()
 }

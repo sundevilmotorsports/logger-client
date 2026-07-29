@@ -19,7 +19,7 @@ pub struct RootView {
     focus_handle: FocusHandle,
     home_tab: HomeTab,
     pub(crate) logs_tab: LogsTab,
-    configuration_tab: ConfigurationTab,
+    pub(crate) configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
     toasts: Vec<(u64, Toast)>,
@@ -80,7 +80,7 @@ impl RootView {
         }
     }
 
-    fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
+    pub(crate) fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
         let id = self.next_toast_id;
         self.next_toast_id += 1;
         self.toasts.push((id, Toast { message, kind }));
@@ -269,7 +269,7 @@ impl Render for RootView {
             Tab::Logs => self
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
-            Tab::Configuration => self.configuration_tab.render(),
+            Tab::Configuration => self.configuration_tab.render(&self.log_tx, cx),
             Tab::Info => self.info_tab.render(&self.state),
         };
 
