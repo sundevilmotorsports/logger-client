@@ -1,4 +1,5 @@
 use gpui::{AnyElement, IntoElement, div, prelude::*, px};
+use gpui_component::label::Label;
 
 use crate::theme;
 
@@ -8,7 +9,7 @@ pub(super) fn section_header(title: &str, add_btn: impl IntoElement) -> AnyEleme
         .flex_row()
         .items_center()
         .justify_between()
-        .child(div().text_color(theme::fg()).child(title.to_string()))
+        .child(Label::new(title.to_string()).text_color(theme::fg()))
         .child(add_btn)
         .into_any_element()
 }
@@ -26,8 +27,7 @@ pub(super) fn row_container() -> gpui::Div {
 }
 
 pub(super) fn field_label(text: &str) -> AnyElement {
-    div()
+    Label::new(text.to_string())
         .text_color(theme::muted())
-        .child(text.to_string())
         .into_any_element()
 }

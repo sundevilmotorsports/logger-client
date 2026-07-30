@@ -1,6 +1,8 @@
 use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
-use gpui_component::Disableable;
-use gpui_component::button::Button;
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::label::Label;
+use gpui_component::progress::Progress;
+use gpui_component::{Disableable, Sizable};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -81,7 +83,7 @@ impl LogsTab {
                 Ok(msg) => (msg.clone(), theme::green()),
                 Err(msg) => (msg.clone(), theme::red()),
             };
-            root = root.child(div().text_color(color).child(msg));
+            root = root.child(Label::new(msg).text_color(color));
         }
 
         root.into_any_element()
@@ -94,7 +96,7 @@ impl LogsTab {
         log_tx: &device::LogRequestTx,
         status_text: String,
         status_color: gpui::Hsla,
-        cx: &mut Context<RootView>,
+        _cx: &mut Context<RootView>,
     ) -> AnyElement {
         let (pause_label, pause_active) = match state.logging_active {
             Some(true) => ("pause", true),
@@ -103,17 +105,17 @@ impl LogsTab {
         };
         let resume = !matches!(state.logging_active, Some(true));
         let pause_log_tx = log_tx.clone();
-        let weak = cx.weak_entity();
         let pause_btn = Button::new("logs-pause")
             .label(pause_label)
+            .small()
             .disabled(!pause_active)
-            .on_click(move |_, _, app| {
+            .on_click(move |_, window, app| {
                 let log_tx = pause_log_tx.clone();
-                let weak = weak.clone();
+                let window_handle = window.window_handle();
                 app.spawn(async move |cx| {
                     let label = if resume { "resume" } else { "pause" };
-                    root_view::run_command_toast(
-                        weak,
+                    root_view::run_command_notify(
+                        window_handle,
                         cx,
                         log_tx,
                         device::Command::SetLogging { active: resume },
@@ -125,15 +127,15 @@ impl LogsTab {
             });
 
         let next_log_tx = log_tx.clone();
-        let weak = cx.weak_entity();
         let next_btn = Button::new("logs-next")
             .label("new log")
-            .on_click(move |_, _, app| {
+            .small()
+            .on_click(move |_, window, app| {
                 let log_tx = next_log_tx.clone();
-                let weak = weak.clone();
+                let window_handle = window.window_handle();
                 app.spawn(async move |cx| {
-                    root_view::run_command_toast(
-                        weak,
+                    root_view::run_command_notify(
+                        window_handle,
                         cx,
                         log_tx,
                         device::Command::NextLog,
@@ -151,7 +153,7 @@ impl LogsTab {
             .gap(px(8.))
             .child(pause_btn)
             .child(next_btn)
-            .child(div().text_color(status_color).child(status_text))
+            .child(Label::new(status_text).text_color(status_color))
             .into_any_element()
     }
 
@@ -180,6 +182,8 @@ impl LogsTab {
         let weak = cx.weak_entity();
         let get_btn = Button::new(("logs-get", idx))
             .label(label)
+            .ghost()
+            .small()
             .disabled(busy.is_some())
             .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
@@ -213,17 +217,11 @@ impl LogsTab {
             .py(px(3.))
             .rounded_sm()
             .hover(|s| s.bg(theme::panel_bg()))
+            .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
             .child(
-                div()
-                    .text_color(name_color)
-                    .w(px(180.))
-                    .child(entry.name.clone()),
-            )
-            .child(
-                div()
+                Label::new(format_size(entry.size))
                     .text_color(theme::muted())
-                    .w(px(64.))
-                    .child(format_size(entry.size)),
+                    .w(px(64.)),
             )
             .child(get_btn);
 
@@ -321,26 +319,12 @@ async fn prompt_save(cx: &mut AsyncApp, suggested_name: &str) -> anyhow::Result<
 }
 
 fn progress_bar(downloaded: u64, total: u64) -> AnyElement {
-    const WIDTH: f32 = 120.;
-    let fraction = if total == 0 {
-        1.0
+    let percent = if total == 0 {
+        100.
     } else {
-        (downloaded as f32 / total as f32).clamp(0.0, 1.0)
+        downloaded as f32 / total as f32 * 100.
     };
-
-    div()
-        .w(px(WIDTH))
-        .h(px(5.))
-        .rounded_full()
-        .bg(theme::border())
-        .child(
-            div()
-                .w(px(WIDTH * fraction))
-                .h(px(5.))
-                .rounded_full()
-                .bg(theme::green()),
-        )
-        .into_any_element()
+    Progress::new().value(percent).w(px(120.)).into_any_element()
 }
 
 fn format_size(bytes: u64) -> String {

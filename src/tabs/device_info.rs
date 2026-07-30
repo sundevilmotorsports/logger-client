@@ -1,4 +1,6 @@
-use gpui::{AnyElement, IntoElement, div, prelude::*};
+use gpui::{AnyElement, div, prelude::*, px};
+use gpui_component::Sizable;
+use gpui_component::description_list::DescriptionList;
 
 use crate::device::DeviceState;
 use crate::theme::{self, FONT_SIZE};
@@ -8,22 +10,19 @@ pub struct DeviceInfoTab;
 
 impl DeviceInfoTab {
     pub fn render(&self, state: &DeviceState) -> AnyElement {
-        let version = state.firmware_version.as_deref().unwrap_or("—");
-        let padded = format!("{:<width$}", "firmware", width = theme::LABEL_COL);
+        let version = state.firmware_version.clone().unwrap_or_else(|| "—".into());
 
-        theme::panel()
+        div()
             .font(theme::mono_font())
-            .text_size(gpui::px(FONT_SIZE))
-            .flex()
-            .flex_row()
-            .items_center()
+            .text_size(px(FONT_SIZE))
             .child(
-                div()
-                    .text_color(theme::muted())
-                    .child(padded)
-                    .whitespace_nowrap(),
+                DescriptionList::horizontal()
+                    .small()
+                    .columns(1)
+                    .bordered(true)
+                    .label_width(px(90.))
+                    .item("firmware", version, 1),
             )
-            .child(div().text_color(theme::fg()).child(version.to_string()))
             .into_any_element()
     }
 }

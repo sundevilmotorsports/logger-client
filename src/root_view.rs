@@ -1,16 +1,16 @@
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Render, WeakEntity, Window, div, prelude::*, px,
+    Render, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
-use std::time::Duration;
+use gpui_component::notification::NotificationType;
+use gpui_component::tab::TabBar;
+use gpui_component::tag::Tag;
+use gpui_component::{Sizable, WindowExt};
 
 use crate::device::{self, DeviceState};
 use crate::tabs::{ConfigurationTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
-use crate::toast::{self, Toast, ToastKind};
-
-const TOAST_LIFETIME: Duration = Duration::from_secs(4);
 
 pub struct RootView {
     state: DeviceState,
@@ -23,8 +23,6 @@ pub struct RootView {
     pub(crate) configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
-    toasts: Vec<(u64, Toast)>,
-    next_toast_id: u64,
 }
 
 impl RootView {
@@ -76,26 +74,7 @@ impl RootView {
             configuration_tab: ConfigurationTab::default(),
             info_tab: DeviceInfoTab::default(),
             logs_poll: None,
-            toasts: Vec::new(),
-            next_toast_id: 0,
         }
-    }
-
-    pub(crate) fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
-        let id = self.next_toast_id;
-        self.next_toast_id += 1;
-        self.toasts.push((id, Toast { message, kind }));
-        cx.notify();
-
-        cx.spawn(async move |weak, cx| {
-            cx.background_executor().timer(TOAST_LIFETIME).await;
-            weak.update(cx, |view, cx| {
-                view.toasts.retain(|(tid, _)| *tid != id);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
     }
 
     /// Keeps `logs_tab.entries` fresh once a second while the Logs tab is open;
@@ -131,82 +110,50 @@ impl RootView {
     }
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(20.))
-            .h(px(TITLEBAR_HEIGHT))
+        let weak = cx.weak_entity();
+        TabBar::new("tabs")
+            .underline()
+            .small()
             .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE));
-
-        for tab in Tab::ALL {
-            let is_selected = tab == self.selected_tab;
-            let (color, underline) = if is_selected {
-                (theme::fg(), theme::accent())
-            } else {
-                (theme::muted(), gpui::transparent_black())
-            };
-
-            row = row.child(
-                div()
-                    .id(("tab", tab as usize))
-                    .h(px(TITLEBAR_HEIGHT))
-                    .px(px(4.))
-                    .flex()
-                    .items_center()
-                    .border_b_2()
-                    .border_color(underline)
-                    .text_color(color)
-                    .hover(|s| s.text_color(theme::fg()))
-                    .cursor_pointer()
-                    .child(tab.title())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.selected_tab = tab;
-                        this.sync_logs_poll(cx);
-                        let log_tx = this.log_tx.clone();
-                        this.configuration_tab
-                            .auto_fetch(&log_tx, window.window_handle(), cx);
-                        cx.notify();
-                    })),
-            );
-        }
-
-        row
+            .text_size(px(theme::FONT_SIZE))
+            .selected_index(self.selected_tab as usize)
+            .children(Tab::ALL.map(|t| t.title()))
+            .on_click(move |ix, window, app| {
+                let tab = Tab::ALL[*ix];
+                let window_handle = window.window_handle();
+                weak.update(app, |this, cx| {
+                    this.selected_tab = tab;
+                    this.sync_logs_poll(cx);
+                    let log_tx = this.log_tx.clone();
+                    this.configuration_tab.auto_fetch(&log_tx, window_handle, cx);
+                    cx.notify();
+                })
+                .ok();
+            })
     }
 
     fn status_indicator(&self) -> impl IntoElement {
-        let connected = self.state.port.is_some();
-        let (color, label) = if connected {
-            (theme::green(), "connected")
+        let tag = if self.state.port.is_some() {
+            Tag::success().outline().child("connected")
         } else {
-            (theme::muted(), "disconnected")
+            Tag::secondary().outline().child("disconnected")
         };
-
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(6.))
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .child(div().text_color(color).child("●"))
-            .child(div().text_color(theme::muted()).child(label))
+        tag.small().font(theme::mono_font())
     }
 
-    fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn restart_button(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let log_tx = self.log_tx.clone();
-        let weak = cx.weak_entity();
         Button::new("restart-button")
             .label("restart")
             .danger()
             .ghost()
-            .compact()
-            .on_click(move |_, _, app| {
+            .small()
+            .on_click(move |_, window, app| {
                 let log_tx = log_tx.clone();
-                let weak = weak.clone();
+                let window_handle = window.window_handle();
                 app.spawn(async move |cx| {
-                    run_command_toast(weak, cx, log_tx, device::Command::Reboot, "restart").await
+                    run_command_notify(window_handle, cx, log_tx, device::Command::Reboot, "restart")
+                        .await
                 })
                 .detach();
             })
@@ -226,7 +173,7 @@ impl RootView {
             .child(
                 div()
                     .absolute()
-                    .top_0()
+                    .bottom_0()
                     .left(px(TITLEBAR_LEFT_INSET))
                     .child(self.tab_bar(cx)),
             )
@@ -246,21 +193,27 @@ impl RootView {
     }
 }
 
-/// Sends `cmd` and reports the result as a toast
-pub async fn run_command_toast(
-    weak: WeakEntity<RootView>,
+/// Pushes a notification into the gpui-component `Root` overlay.
+pub fn notify(window: AnyWindowHandle, cx: &mut AsyncApp, kind: NotificationType, message: String) {
+    cx.update_window(window, |_, window, cx| {
+        window.push_notification((kind, SharedString::from(message)), cx);
+    })
+    .ok();
+}
+
+/// Sends `cmd` and reports the result as a notification
+pub async fn run_command_notify(
+    window: AnyWindowHandle,
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
     cmd: device::Command,
     label: &str,
 ) {
-    let result = device::request(&log_tx, cmd).await;
-    let (message, kind) = match result {
-        Ok(_) => (label.to_string(), ToastKind::Success),
-        Err(e) => (format!("{label} failed: {e}"), ToastKind::Error),
+    let (kind, message) = match device::request(&log_tx, cmd).await {
+        Ok(_) => (NotificationType::Success, label.to_string()),
+        Err(e) => (NotificationType::Error, format!("{label} failed: {e}")),
     };
-    weak.update(cx, |view, cx| view.push_toast(cx, message, kind))
-        .ok();
+    notify(window, cx, kind, message);
 }
 
 impl Focusable for RootView {
@@ -309,6 +262,5 @@ impl Render for RootView {
             .bg(theme::bg())
             .child(body)
             .child(self.title_bar(cx))
-            .child(toast::render(&self.toasts))
     }
 }

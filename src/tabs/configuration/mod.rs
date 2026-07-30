@@ -2,16 +2,20 @@ mod commands;
 mod model;
 mod widgets;
 
-use gpui::{AnyElement, AnyWindowHandle, Context, Hsla, IntoElement, div, prelude::*, px};
-use gpui_component::Disableable;
+use gpui::{
+    AnyElement, AnyWindowHandle, Context, Hsla, IntoElement, SharedString, div, prelude::*, px,
+};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::Input;
+use gpui_component::label::Label;
+use gpui_component::notification::NotificationType;
+use gpui_component::spinner::Spinner;
+use gpui_component::{Disableable, Sizable, WindowExt};
 
 use crate::device;
 use crate::root_view::RootView;
 use crate::theme;
-use crate::toast::ToastKind;
 use commands::{load_from_file, push_to_device, refresh, save_to_file};
 use model::{AdcChannelForm, CanDeviceForm, build_config_json, signal_count};
 use widgets::{field_label, row_container, section_header};
@@ -75,11 +79,7 @@ impl ConfigurationTab {
         let mut body = div().flex().flex_col().gap(px(16.));
 
         if !self.loaded && self.can_devices.is_empty() && self.adc_channels.is_empty() {
-            body = body.child(
-                div()
-                    .text_color(theme::muted())
-                    .child("No configuration loaded yet."),
-            );
+            body = body.child(Label::new("No configuration loaded yet.").text_color(theme::muted()));
         } else {
             body = body.child(self.can_section(cx)).child(self.adc_section(cx));
         }
@@ -115,6 +115,7 @@ impl ConfigurationTab {
         let refresh_tx = log_tx.clone();
         let refresh_btn = Button::new("config-refresh")
             .label("refresh")
+            .small()
             .disabled(busy)
             .on_click(move |_, window, app| {
                 let log_tx = refresh_tx.clone();
@@ -130,6 +131,7 @@ impl ConfigurationTab {
         let load_tx = log_tx.clone();
         let load_btn = Button::new("config-load")
             .label("load file...")
+            .small()
             .disabled(busy)
             .on_click(move |_, window, app| {
                 let log_tx = load_tx.clone();
@@ -152,6 +154,7 @@ impl ConfigurationTab {
         let save_tx = log_tx.clone();
         let save_btn = Button::new("config-save")
             .label("save file...")
+            .small()
             .disabled(busy)
             .on_click(move |_, window, app| {
                 let log_tx = save_tx.clone();
@@ -175,9 +178,11 @@ impl ConfigurationTab {
         let push_btn = Button::new("config-push")
             .label("push to device")
             .primary()
+            .small()
             .disabled(busy)
-            .on_click(move |_, _, app| {
+            .on_click(move |_, window, app| {
                 let log_tx = push_tx.clone();
+                let window_handle = window.window_handle();
                 weak.update(app, |this, cx| {
                     if matches!(this.configuration_tab.status, Status::Loading) {
                         return;
@@ -185,17 +190,31 @@ impl ConfigurationTab {
                     let value = match build_config_json(&this.configuration_tab, cx) {
                         Ok(v) => v,
                         Err(e) => {
-                            this.push_toast(cx, format!("push failed: {e}"), ToastKind::Error);
+                            window.push_notification(
+                                (
+                                    NotificationType::Error,
+                                    SharedString::from(format!("push failed: {e}")),
+                                ),
+                                cx,
+                            );
                             return;
                         }
                     };
                     this.configuration_tab.status = Status::Loading;
                     cx.notify();
-                    cx.spawn(async move |weak, cx| push_to_device(weak, cx, log_tx, value).await)
-                        .detach();
+                    cx.spawn(async move |weak, cx| {
+                        push_to_device(weak, cx, log_tx, value, window_handle).await
+                    })
+                    .detach();
                 })
                 .ok();
             });
+
+        let mut status = div().flex().flex_row().items_center().gap(px(6.));
+        if busy {
+            status = status.child(Spinner::new().xsmall());
+        }
+        status = status.child(Label::new(status_text).text_color(status_color));
 
         div()
             .flex()
@@ -206,7 +225,7 @@ impl ConfigurationTab {
             .child(load_btn)
             .child(save_btn)
             .child(push_btn)
-            .child(div().text_color(status_color).child(status_text))
+            .child(status)
             .into_any_element()
     }
 
@@ -220,6 +239,8 @@ impl ConfigurationTab {
         let add_btn =
             Button::new("can-add")
                 .label("+ add device")
+                .ghost()
+                .small()
                 .on_click(move |_, window, app| {
                     weak.update(app, |this, cx| {
                         this.configuration_tab
@@ -251,6 +272,8 @@ impl ConfigurationTab {
         let remove_btn =
             Button::new(("can-remove", i))
                 .label("remove")
+                .ghost()
+                .small()
                 .on_click(move |_, _, app| {
                     weak.update(app, |this, cx| {
                         this.configuration_tab.can_devices.remove(i);
@@ -292,11 +315,7 @@ impl ConfigurationTab {
             .child(ext_checkbox)
             .child(field_label("fd"))
             .child(fd_checkbox)
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .child(format!("{signals} signal(s)")),
-            )
+            .child(Label::new(format!("{signals} signal(s)")).text_color(theme::muted()))
             .child(remove_btn)
             .into_any_element()
     }
@@ -311,6 +330,8 @@ impl ConfigurationTab {
         let add_btn =
             Button::new("adc-add")
                 .label("+ add channel")
+                .ghost()
+                .small()
                 .on_click(move |_, window, app| {
                     weak.update(app, |this, cx| {
                         this.configuration_tab
@@ -340,6 +361,8 @@ impl ConfigurationTab {
         let remove_btn =
             Button::new(("adc-remove", i))
                 .label("remove")
+                .ghost()
+                .small()
                 .on_click(move |_, _, app| {
                     weak.update(app, |this, cx| {
                         this.configuration_tab.adc_channels.remove(i);

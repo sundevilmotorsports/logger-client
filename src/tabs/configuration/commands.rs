@@ -1,9 +1,10 @@
-use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, PathPromptOptions, WeakEntity};
+use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, PathPromptOptions, SharedString, WeakEntity};
+use gpui_component::WindowExt;
+use gpui_component::notification::NotificationType;
 use std::path::PathBuf;
 
 use crate::device::{self, Command, Response};
-use crate::root_view::RootView;
-use crate::toast::ToastKind;
+use crate::root_view::{RootView, notify};
 
 use super::Status;
 use super::model::{adc_channels_from_json, can_devices_from_json};
@@ -42,23 +43,25 @@ pub(super) async fn push_to_device(
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
     value: serde_json::Value,
+    window_handle: AnyWindowHandle,
 ) {
     let result = device::request(&log_tx, Command::SetConfig { args: value }).await;
     weak.update(cx, |view, cx| {
         view.configuration_tab.status = Status::Idle;
-        match result {
-            Ok(Response::SetConfigOk) => {
-                view.push_toast(cx, "configuration pushed".to_string(), ToastKind::Success);
-            }
-            Ok(other) => view.push_toast(
-                cx,
-                format!("unexpected response: {other:?}"),
-                ToastKind::Error,
-            ),
-            Err(e) => view.push_toast(cx, format!("push failed: {e}"), ToastKind::Error),
-        }
+        cx.notify();
     })
     .ok();
+    let (kind, message) = match result {
+        Ok(Response::SetConfigOk) => {
+            (NotificationType::Success, "configuration pushed".to_string())
+        }
+        Ok(other) => (
+            NotificationType::Error,
+            format!("unexpected response: {other:?}"),
+        ),
+        Err(e) => (NotificationType::Error, format!("push failed: {e}")),
+    };
+    notify(window_handle, cx, kind, message);
 }
 
 pub(super) async fn load_from_file(
@@ -69,26 +72,33 @@ pub(super) async fn load_from_file(
 ) {
     let result = load_from_file_inner(cx, &log_tx).await;
     cx.update_window(window_handle, |_, window, cx| {
-        weak.update(cx, |view, cx| match result {
-            Ok(Some(v)) => {
-                view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
-                view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
-                view.configuration_tab.loaded = true;
-                view.configuration_tab.status = Status::Idle;
-                view.push_toast(cx, "configuration loaded".to_string(), ToastKind::Success);
+        weak.update(cx, |view, cx| {
+            match result {
+                Ok(Some(v)) => {
+                    view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
+                    view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
+                    view.configuration_tab.loaded = true;
+                    view.configuration_tab.status = Status::Idle;
+                    window.push_notification(
+                        (NotificationType::Success, "configuration loaded"),
+                        cx,
+                    );
+                }
+                Ok(None) => {
+                    view.configuration_tab.status = Status::Idle; // dialog cancelled
+                }
+                Err(e) => {
+                    view.configuration_tab.status = Status::Error(e.to_string());
+                    window.push_notification(
+                        (
+                            NotificationType::Error,
+                            SharedString::from(format!("load configuration failed: {e}")),
+                        ),
+                        cx,
+                    );
+                }
             }
-            Ok(None) => {
-                view.configuration_tab.status = Status::Idle; // dialog cancelled
-                cx.notify();
-            }
-            Err(e) => {
-                view.configuration_tab.status = Status::Error(e.to_string());
-                view.push_toast(
-                    cx,
-                    format!("load configuration failed: {e}"),
-                    ToastKind::Error,
-                );
-            }
+            cx.notify();
         })
         .ok();
     })
@@ -149,19 +159,24 @@ pub(super) async fn save_to_file(
                     view.configuration_tab.adc_channels =
                         adc_channels_from_json(&value, window, cx);
                     view.configuration_tab.loaded = true;
-                    view.push_toast(
+                    window.push_notification(
+                        (
+                            NotificationType::Success,
+                            SharedString::from(format!("saved to {}", path.display())),
+                        ),
                         cx,
-                        format!("saved to {}", path.display()),
-                        ToastKind::Success,
                     );
                 }
-                Ok(None) => cx.notify(), // dialog cancelled
-                Err(e) => view.push_toast(
+                Ok(None) => {} // dialog cancelled
+                Err(e) => window.push_notification(
+                    (
+                        NotificationType::Error,
+                        SharedString::from(format!("save configuration failed: {e}")),
+                    ),
                     cx,
-                    format!("save configuration failed: {e}"),
-                    ToastKind::Error,
                 ),
             }
+            cx.notify();
         })
         .ok();
     })

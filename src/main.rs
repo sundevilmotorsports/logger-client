@@ -5,7 +5,6 @@ pub mod log_parse;
 pub mod root_view;
 pub mod tabs;
 pub mod theme;
-pub mod toast;
 
 use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
 use gpui_component::theme::{Theme, ThemeMode};
@@ -48,6 +47,7 @@ fn main() {
                 },
                 |window, cx| {
                     Theme::change(ThemeMode::Dark, Some(window), cx);
+                    theme::apply(cx);
                     let view = cx.new(|cx| root_view::RootView::new(window, cx));
                     cx.new(|cx| gpui_component::Root::new(view, window, cx))
                 },
