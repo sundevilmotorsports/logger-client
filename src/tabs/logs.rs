@@ -1,4 +1,9 @@
 use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::label::Label;
+use gpui_component::list::ListItem;
+use gpui_component::progress::Progress;
+use gpui_component::{Disableable, Sizable, h_flex, v_flex};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -46,24 +51,27 @@ impl LogsTab {
         cx: &mut Context<RootView>,
     ) -> AnyElement {
         let (status_text, status_color) = match &self.status {
-            Status::Idle if self.entries.is_empty() => ("no logs yet".to_string(), theme::muted()),
+            Status::Idle if self.entries.is_empty() => (String::new(), theme::muted()),
             Status::Idle => (format!("{} log(s)", self.entries.len()), theme::muted()),
             Status::Loading => ("loading...".to_string(), theme::amber()),
             Status::Error(e) => (format!("error: {e}"), theme::red()),
         };
 
-        let mut rows = div().flex().flex_col().items_start().gap(px(4.));
-        for (idx, entry) in self.entries.iter().enumerate() {
-            rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
-        }
+        let body: AnyElement = if self.entries.is_empty() {
+            super::empty_state("no logs yet")
+        } else {
+            let mut rows = v_flex().items_start().gap(px(2.));
+            for (idx, entry) in self.entries.iter().enumerate() {
+                rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
+            }
+            rows.into_any_element()
+        };
 
-        let mut root = div()
+        let mut root = v_flex()
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
             .size_full()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
+            .gap(px(12.))
             .child(self.toolbar(state, req_tx, log_tx, status_text, status_color, cx))
             .child(
                 div()
@@ -71,7 +79,7 @@ impl LogsTab {
                     .overflow_y_scroll()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(rows),
+                    .child(body),
             );
 
         if let Some(result) = &self.last_result {
@@ -79,7 +87,7 @@ impl LogsTab {
                 Ok(msg) => (msg.clone(), theme::green()),
                 Err(msg) => (msg.clone(), theme::red()),
             };
-            root = root.child(div().text_color(color).child(msg));
+            root = root.child(Label::new(msg).text_color(color));
         }
 
         root.into_any_element()
@@ -101,10 +109,15 @@ impl LogsTab {
         };
         let resume = !matches!(state.logging_active, Some(true));
         let pause_log_tx = log_tx.clone();
-        let mut pause_btn =
-            theme::button("logs-pause", pause_label).on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        let pause_btn = Button::new("logs-pause")
+            .label(pause_label)
+            .small()
+            .disabled(!pause_active)
+            .on_click(move |_, _, app| {
                 let log_tx = pause_log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     let label = if resume { "resume" } else { "pause" };
                     root_view::run_command_toast(
                         weak,
@@ -116,16 +129,17 @@ impl LogsTab {
                     .await
                 })
                 .detach();
-            }));
-        if !pause_active {
-            pause_btn = pause_btn.text_color(theme::muted().opacity(0.4));
-        }
+            });
 
         let next_log_tx = log_tx.clone();
-        let next_btn =
-            theme::button("logs-next", "new log").on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        let next_btn = Button::new("logs-next")
+            .label("new log")
+            .small()
+            .on_click(move |_, _, app| {
                 let log_tx = next_log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     root_view::run_command_toast(
                         weak,
                         cx,
@@ -136,16 +150,13 @@ impl LogsTab {
                     .await
                 })
                 .detach();
-            }));
+            });
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
+        h_flex()
+            .justify_between()
             .gap(px(8.))
-            .child(pause_btn)
-            .child(next_btn)
-            .child(div().text_color(status_color).child(status_text))
+            .child(h_flex().gap(px(8.)).child(pause_btn).child(next_btn))
+            .child(Label::new(status_text).text_color(status_color))
             .into_any_element()
     }
 
@@ -171,56 +182,58 @@ impl LogsTab {
         let log_tx = log_tx.clone();
         let name = entry.name.clone();
         let total = entry.size;
-        let get_btn =
-            theme::button(("logs-get", idx), label).on_click(cx.listener(move |this, _, _, cx| {
-                if this.logs_tab.busy.is_some() {
-                    return;
-                }
-                this.logs_tab.busy = Some(Busy {
-                    name: name.clone(),
-                    downloaded: 0,
-                    total,
-                });
-                this.logs_tab.last_result = None;
-                cx.notify();
-
+        let weak = cx.weak_entity();
+        let get_btn = Button::new(("logs-get", idx))
+            .label(label)
+            .ghost()
+            .small()
+            .disabled(busy.is_some())
+            .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
                 let name = name.clone();
-                cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
-                    .detach();
-            }));
+                let weak = weak.clone();
+                weak.update(app, |this, cx| {
+                    if this.logs_tab.busy.is_some() {
+                        return;
+                    }
+                    this.logs_tab.busy = Some(Busy {
+                        name: name.clone(),
+                        downloaded: 0,
+                        total,
+                    });
+                    this.logs_tab.last_result = None;
+                    cx.notify();
 
-        let row = div()
-            .id(("logs-row", idx))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.))
-            .px(px(8.))
-            .py(px(3.))
+                    cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
+                        .detach();
+                })
+                .ok();
+            });
+
+        let row = ListItem::new(("logs-row", idx))
+            .text_size(px(theme::FONT_SIZE))
             .rounded_sm()
-            .hover(|s| s.bg(theme::panel_bg()))
             .child(
-                div()
-                    .text_color(name_color)
-                    .w(px(180.))
-                    .child(entry.name.clone()),
-            )
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .w(px(64.))
-                    .child(format_size(entry.size)),
-            )
-            .child(get_btn);
+                h_flex()
+                    .gap(px(12.))
+                    .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
+                    .child(
+                        Label::new(format_size(entry.size))
+                            .text_color(theme::muted())
+                            .w(px(64.)),
+                    )
+                    .child(get_btn),
+            );
 
         match busy {
-            Some(b) => div()
-                .flex()
-                .flex_col()
+            Some(b) => v_flex()
                 .gap(px(2.))
                 .child(row)
-                .child(progress_bar(b.downloaded, b.total))
+                .child(
+                    div()
+                        .px(px(12.))
+                        .child(progress_bar(b.downloaded, b.total)),
+                )
                 .into_any_element(),
             None => row.into_any_element(),
         }
@@ -308,26 +321,12 @@ async fn prompt_save(cx: &mut AsyncApp, suggested_name: &str) -> anyhow::Result<
 }
 
 fn progress_bar(downloaded: u64, total: u64) -> AnyElement {
-    const WIDTH: f32 = 120.;
-    let fraction = if total == 0 {
-        1.0
+    let percent = if total == 0 {
+        100.
     } else {
-        (downloaded as f32 / total as f32).clamp(0.0, 1.0)
+        downloaded as f32 / total as f32 * 100.
     };
-
-    div()
-        .w(px(WIDTH))
-        .h(px(5.))
-        .rounded_full()
-        .bg(theme::border())
-        .child(
-            div()
-                .w(px(WIDTH * fraction))
-                .h(px(5.))
-                .rounded_full()
-                .bg(theme::green()),
-        )
-        .into_any_element()
+    Progress::new().value(percent).w_full().into_any_element()
 }
 
 fn format_size(bytes: u64) -> String {

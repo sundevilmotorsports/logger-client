@@ -8,9 +8,19 @@ pub use device_info::DeviceInfoTab;
 pub use home::HomeTab;
 pub use logs::LogsTab;
 
-use gpui::{AnyElement, IntoElement, div, prelude::*};
+use gpui::{AnyElement, prelude::*};
+use gpui_component::label::Label;
+use gpui_component::v_flex;
 
-use crate::theme::{self, FONT_SIZE};
+pub(crate) fn empty_state(text: &'static str) -> AnyElement {
+    v_flex()
+        .size_full()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .child(Label::new(text).text_color(crate::theme::muted()))
+        .into_any_element()
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -31,13 +41,4 @@ impl Tab {
             Tab::Info => "Info",
         }
     }
-}
-
-fn placeholder(text: &str) -> AnyElement {
-    div()
-        .font(theme::mono_font())
-        .text_size(gpui::px(FONT_SIZE))
-        .text_color(theme::muted())
-        .child(text.to_string())
-        .into_any_element()
 }

@@ -13,7 +13,6 @@ pub struct Toast {
     pub kind: ToastKind,
 }
 
-/// Bottom-right stack of auto-dismissing toasts
 pub fn render(toasts: &[(u64, Toast)]) -> impl IntoElement {
     let mut stack = div()
         .absolute()

@@ -2,6 +2,10 @@ use gpui::{
     AnyWindowHandle, App, AsyncApp, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     Render, WeakEntity, Window, div, prelude::*, px,
 };
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::label::Label;
+use gpui_component::tab::TabBar;
+use gpui_component::{Sizable, h_flex, v_flex};
 use std::time::Duration;
 
 use crate::device::{self, DeviceState};
@@ -19,7 +23,7 @@ pub struct RootView {
     focus_handle: FocusHandle,
     home_tab: HomeTab,
     pub(crate) logs_tab: LogsTab,
-    configuration_tab: ConfigurationTab,
+    pub(crate) configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
     toasts: Vec<(u64, Toast)>,
@@ -80,7 +84,7 @@ impl RootView {
         }
     }
 
-    fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
+    pub(crate) fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
         let id = self.next_toast_id;
         self.next_toast_id += 1;
         self.toasts.push((id, Toast { message, kind }));
@@ -130,79 +134,60 @@ impl RootView {
     }
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(20.))
-            .h(px(TITLEBAR_HEIGHT))
+        let weak = cx.weak_entity();
+        TabBar::new("tabs")
+            .underline()
+            .small()
             .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE));
-
-        for tab in Tab::ALL {
-            let is_selected = tab == self.selected_tab;
-            let (color, underline) = if is_selected {
-                (theme::fg(), theme::accent())
-            } else {
-                (theme::muted(), gpui::transparent_black())
-            };
-
-            row = row.child(
-                div()
-                    .id(("tab", tab as usize))
-                    .h(px(TITLEBAR_HEIGHT))
-                    .px(px(4.))
-                    .flex()
-                    .items_center()
-                    .border_b_2()
-                    .border_color(underline)
-                    .text_color(color)
-                    .hover(|s| s.text_color(theme::fg()))
-                    .cursor_pointer()
-                    .child(tab.title())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_tab = tab;
-                        this.sync_logs_poll(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-
-        row
+            .text_size(px(theme::FONT_SIZE))
+            .selected_index(self.selected_tab as usize)
+            .children(Tab::ALL.map(|t| t.title()))
+            .on_click(move |ix, window, app| {
+                let tab = Tab::ALL[*ix];
+                let window_handle = window.window_handle();
+                weak.update(app, |this, cx| {
+                    this.selected_tab = tab;
+                    this.sync_logs_poll(cx);
+                    let log_tx = this.log_tx.clone();
+                    this.configuration_tab
+                        .auto_fetch(&log_tx, window_handle, cx);
+                    cx.notify();
+                })
+                .ok();
+            })
     }
 
     fn status_indicator(&self) -> impl IntoElement {
-        let connected = self.state.port.is_some();
-        let (color, label) = if connected {
+        let (color, label) = if self.state.port.is_some() {
             (theme::green(), "connected")
         } else {
             (theme::muted(), "disconnected")
         };
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
+        h_flex()
             .gap(px(6.))
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
             .child(div().text_color(color).child("●"))
-            .child(div().text_color(theme::muted()).child(label))
+            .child(Label::new(label).text_color(theme::muted()))
     }
 
     fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let log_tx = self.log_tx.clone();
-        theme::button_base("restart-button", "restart")
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .hover(|s| s.text_color(theme::red()).border_color(theme::red()))
-            .on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        Button::new("restart-button")
+            .label("restart")
+            .danger()
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     run_command_toast(weak, cx, log_tx, device::Command::Reboot, "restart").await
                 })
                 .detach();
-            }))
+            })
     }
 
     /// A full-width strip behind the tabs, colored differently from the body.
@@ -219,19 +204,16 @@ impl RootView {
             .child(
                 div()
                     .absolute()
-                    .top_0()
+                    .bottom_0()
                     .left(px(TITLEBAR_LEFT_INSET))
                     .child(self.tab_bar(cx)),
             )
             .child(
-                div()
+                h_flex()
                     .absolute()
                     .top_0()
                     .right(px(TITLEBAR_RIGHT_INSET))
                     .h(px(TITLEBAR_HEIGHT))
-                    .flex()
-                    .flex_row()
-                    .items_center()
                     .gap(px(16.))
                     .child(self.status_indicator())
                     .child(self.restart_button(cx)),
@@ -269,15 +251,13 @@ impl Render for RootView {
             Tab::Logs => self
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
-            Tab::Configuration => self.configuration_tab.render(),
+            Tab::Configuration => self.configuration_tab.render(&self.log_tx, cx),
             Tab::Info => self.info_tab.render(&self.state),
         };
 
-        let body = div()
+        let body = v_flex()
             .max_w(px(640.))
             .size_full()
-            .flex()
-            .flex_col()
             .pl(px(32.))
             .pr(px(32.))
             .pb(px(32.))
@@ -286,9 +266,14 @@ impl Render for RootView {
 
         div()
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, _| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                // Key events bubble from whatever's focused up through this
+                // root handler, so without this check typing "q" into a
+                // Configuration tab text field would quit the app.
+                let root_focused = window.focused(cx).is_none_or(|f| f == this.focus_handle);
                 let m = &event.keystroke.modifiers;
-                if event.keystroke.key == "q" && !m.control && !m.platform && !m.alt {
+                if root_focused && event.keystroke.key == "q" && !m.control && !m.platform && !m.alt
+                {
                     std::process::exit(0);
                 }
             }))

@@ -1,4 +1,7 @@
-use gpui::{AnyElement, Hsla, div, prelude::*};
+use gpui::{AnyElement, Hsla, div, prelude::*, px};
+use gpui_component::Sizable;
+use gpui_component::description_list::DescriptionList;
+use gpui_component::label::Label;
 
 use crate::device::{self, DeviceState};
 use crate::theme::{self, FONT_SIZE};
@@ -12,36 +15,32 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
+fn value(text: String, color: Hsla) -> AnyElement {
+    Label::new(text).text_color(color).into_any_element()
+}
+
 #[derive(Default)]
 pub struct HomeTab;
 
 impl HomeTab {
-    fn row(&self, label: &str, value: &str, color: Hsla) -> AnyElement {
-        let padded = format!("{:<width$}", label, width = theme::LABEL_COL);
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .child(padded)
-                    .whitespace_nowrap(),
-            )
-            .child(div().text_color(color).child(value.to_string()))
-            .into_any_element()
-    }
-
-    pub fn render(&self, state: &DeviceState, req_tx: &device::RequestTx) -> AnyElement {
+    pub fn render(&self, state: &DeviceState, _req_tx: &device::RequestTx) -> AnyElement {
         let (status, status_color) = match &state.port {
-            Some(_) => ("connected", theme::green()),
-            None => ("scanning...", theme::amber()),
+            Some(_) => ("connected".to_string(), theme::green()),
+            None => ("scanning...".to_string(), theme::amber()),
         };
-        let port = state.port.as_deref().unwrap_or("—");
+        let port = state.port.clone().unwrap_or_else(|| "—".to_string());
         let uptime = state
             .uptime
             .map(format_uptime)
             .unwrap_or_else(|| "—".to_string());
+
+        let (logging, logging_color) = match state.logging_active {
+            Some(true) => ("recording".to_string(), theme::green()),
+            Some(false) => ("paused".to_string(), theme::amber()),
+            None => ("—".to_string(), theme::muted()),
+        };
+        let current_log = state.current_log.clone().unwrap_or_else(|| "—".to_string());
+
         let (gps_str, gps_color) = match &state.gps {
             Some(f) => (
                 format!(
@@ -72,20 +71,20 @@ impl HomeTab {
 
         div()
             .font(theme::mono_font())
-            .text_size(gpui::px(FONT_SIZE))
-            .flex()
-            .flex_col()
-            .gap(gpui::px(12.))
+            .text_size(px(FONT_SIZE))
             .child(
-                theme::panel()
-                    .flex()
-                    .flex_col()
-                    .gap(gpui::px(6.))
-                    .child(self.row("status", status, status_color))
-                    .child(self.row("port", port, theme::fg()))
-                    .child(self.row("uptime", &uptime, theme::fg()))
-                    .child(self.row("gps", &gps_str, gps_color))
-                    .child(self.row("imu", &imu_str, imu_color)),
+                DescriptionList::horizontal()
+                    .small()
+                    .columns(1)
+                    .bordered(true)
+                    .label_width(px(90.))
+                    .item("status", value(status, status_color), 1)
+                    .item("port", value(port, theme::fg()), 1)
+                    .item("uptime", value(uptime, theme::fg()), 1)
+                    .item("logging", value(logging, logging_color), 1)
+                    .item("file", value(current_log, theme::fg()), 1)
+                    .item("gps", value(gps_str, gps_color), 1)
+                    .item("imu", value(imu_str, imu_color), 1),
             )
             .into_any_element()
     }

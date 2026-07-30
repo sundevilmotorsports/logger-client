@@ -8,6 +8,7 @@ pub mod theme;
 pub mod toast;
 
 use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
+use gpui_component::theme::{Theme, ThemeMode};
 use rust_embed::RustEmbed;
 
 #[derive(Clone, Copy, RustEmbed)]
@@ -33,7 +34,9 @@ fn main() {
     gpui::Application::new()
         .with_assets(Assets)
         .run(|cx: &mut App| {
-            let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
+            gpui_component::init(cx);
+
+            let bounds = Bounds::centered(None, size(px(780.), px(540.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
@@ -43,7 +46,12 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| root_view::RootView::new(window, cx)),
+                |window, cx| {
+                    Theme::change(ThemeMode::Dark, Some(window), cx);
+                    theme::apply(cx);
+                    let view = cx.new(|cx| root_view::RootView::new(window, cx));
+                    cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                },
             )
             .expect("failed to open window");
 
