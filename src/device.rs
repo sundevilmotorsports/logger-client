@@ -28,7 +28,10 @@ pub enum Command {
 pub enum Response {
     Pong,
     Version { version: String },
-    Status { config_loaded: bool },
+    Status {
+        config_loaded: bool,
+        subsystems: DeviceStatusFlags,
+    },
     Config(serde_json::Value),
     SetConfigOk,
     Frames(Vec<serde_json::Value>),
@@ -64,6 +67,18 @@ pub struct GpsFix {
 pub struct LogEntry {
     pub name: String,
     pub size: u64,
+}
+
+/// Per-subsystem init/health flags reported by the firmware's `Status` command.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct DeviceStatusFlags {
+    pub adc: bool,
+    pub can: bool,
+    pub gnss: bool,
+    pub imu: bool,
+    pub logging: bool,
+    pub sd: bool,
+    pub usb_hs: bool,
 }
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
@@ -127,6 +142,7 @@ impl Connection {
             },
             Command::Status => Response::Status {
                 config_loaded: data["config_loaded"].as_bool().unwrap_or(false),
+                subsystems: serde_json::from_value(data["subsystems"].clone()).unwrap_or_default(),
             },
             Command::GetConfig => Response::Config(data),
             Command::SetConfig { .. } => Response::SetConfigOk,
@@ -275,6 +291,7 @@ pub struct DeviceState {
     pub imu: Option<ImuReading>,
     pub logging_active: Option<bool>,
     pub current_log: Option<String>,
+    pub status: Option<DeviceStatusFlags>,
 }
 
 pub fn poll(
@@ -359,6 +376,10 @@ pub fn poll(
                         };
                         state.imu = match conn.request(Command::Imu) {
                             Ok(Response::Imu(reading)) => Some(reading),
+                            _ => None,
+                        };
+                        state.status = match conn.request(Command::Status) {
+                            Ok(Response::Status { subsystems, .. }) => Some(subsystems),
                             _ => None,
                         };
                         match conn.request(Command::LogStatus) {

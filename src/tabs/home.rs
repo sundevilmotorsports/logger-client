@@ -1,9 +1,9 @@
 use gpui::{AnyElement, Hsla, div, prelude::*, px};
-use gpui_component::Sizable;
 use gpui_component::description_list::DescriptionList;
 use gpui_component::label::Label;
+use gpui_component::{Sizable, h_flex};
 
-use crate::device::{self, DeviceState};
+use crate::device::{self, DeviceState, DeviceStatusFlags};
 use crate::theme::{self, FONT_SIZE};
 
 fn format_uptime(secs: u64) -> String {
@@ -17,6 +17,29 @@ fn format_uptime(secs: u64) -> String {
 
 fn value(text: String, color: Hsla) -> AnyElement {
     Label::new(text).text_color(color).into_any_element()
+}
+
+fn health_row(status: Option<DeviceStatusFlags>) -> AnyElement {
+    let items: [(&str, Option<bool>); 7] = [
+        ("adc", status.map(|s| s.adc)),
+        ("can", status.map(|s| s.can)),
+        ("gnss", status.map(|s| s.gnss)),
+        ("imu", status.map(|s| s.imu)),
+        ("logging", status.map(|s| s.logging)),
+        ("sd", status.map(|s| s.sd)),
+        ("usb", status.map(|s| s.usb_hs)),
+    ];
+
+    let mut row = h_flex().gap(px(12.));
+    for (label, ok) in items {
+        let color = match ok {
+            Some(true) => theme::green(),
+            Some(false) => theme::red(),
+            None => theme::muted(),
+        };
+        row = row.child(Label::new(label).text_color(color));
+    }
+    row.into_any_element()
 }
 
 #[derive(Default)]
@@ -81,6 +104,7 @@ impl HomeTab {
                     .item("status", value(status, status_color), 1)
                     .item("port", value(port, theme::fg()), 1)
                     .item("uptime", value(uptime, theme::fg()), 1)
+                    .item("health", health_row(state.status), 1)
                     .item("logging", value(logging, logging_color), 1)
                     .item("file", value(current_log, theme::fg()), 1)
                     .item("gps", value(gps_str, gps_color), 1)
