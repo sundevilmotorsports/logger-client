@@ -54,6 +54,9 @@ pub fn apply(cx: &mut App) {
     c.progress_bar = green();
     c.description_list_label = panel_bg();
     c.description_list_label_foreground = muted();
+    c.group_box = panel_bg();
+    c.group_box_foreground = fg();
+    c.list_hover = panel_bg();
 }
 
 pub fn mono_font() -> Font {

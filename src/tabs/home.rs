@@ -33,6 +33,14 @@ impl HomeTab {
             .uptime
             .map(format_uptime)
             .unwrap_or_else(|| "—".to_string());
+
+        let (logging, logging_color) = match state.logging_active {
+            Some(true) => ("recording".to_string(), theme::green()),
+            Some(false) => ("paused".to_string(), theme::amber()),
+            None => ("—".to_string(), theme::muted()),
+        };
+        let current_log = state.current_log.clone().unwrap_or_else(|| "—".to_string());
+
         let (gps_str, gps_color) = match &state.gps {
             Some(f) => (
                 format!(
@@ -73,6 +81,8 @@ impl HomeTab {
                     .item("status", value(status, status_color), 1)
                     .item("port", value(port, theme::fg()), 1)
                     .item("uptime", value(uptime, theme::fg()), 1)
+                    .item("logging", value(logging, logging_color), 1)
+                    .item("file", value(current_log, theme::fg()), 1)
                     .item("gps", value(gps_str, gps_color), 1)
                     .item("imu", value(imu_str, imu_color), 1),
             )

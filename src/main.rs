@@ -35,7 +35,7 @@ fn main() {
         .run(|cx: &mut App| {
             gpui_component::init(cx);
 
-            let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
+            let bounds = Bounds::centered(None, size(px(780.), px(540.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),

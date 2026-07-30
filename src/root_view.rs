@@ -3,10 +3,10 @@ use gpui::{
     Render, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::label::Label;
 use gpui_component::notification::NotificationType;
 use gpui_component::tab::TabBar;
-use gpui_component::tag::Tag;
-use gpui_component::{Sizable, WindowExt};
+use gpui_component::{Root, Sizable, WindowExt, h_flex, v_flex};
 
 use crate::device::{self, DeviceState};
 use crate::tabs::{ConfigurationTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
@@ -125,7 +125,8 @@ impl RootView {
                     this.selected_tab = tab;
                     this.sync_logs_poll(cx);
                     let log_tx = this.log_tx.clone();
-                    this.configuration_tab.auto_fetch(&log_tx, window_handle, cx);
+                    this.configuration_tab
+                        .auto_fetch(&log_tx, window_handle, cx);
                     cx.notify();
                 })
                 .ok();
@@ -133,12 +134,18 @@ impl RootView {
     }
 
     fn status_indicator(&self) -> impl IntoElement {
-        let tag = if self.state.port.is_some() {
-            Tag::success().outline().child("connected")
+        let (color, label) = if self.state.port.is_some() {
+            (theme::green(), "connected")
         } else {
-            Tag::secondary().outline().child("disconnected")
+            (theme::muted(), "disconnected")
         };
-        tag.small().font(theme::mono_font())
+
+        h_flex()
+            .gap(px(6.))
+            .font(theme::mono_font())
+            .text_size(px(theme::FONT_SIZE))
+            .child(div().text_color(color).child("●"))
+            .child(Label::new(label).text_color(theme::muted()))
     }
 
     fn restart_button(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -152,8 +159,14 @@ impl RootView {
                 let log_tx = log_tx.clone();
                 let window_handle = window.window_handle();
                 app.spawn(async move |cx| {
-                    run_command_notify(window_handle, cx, log_tx, device::Command::Reboot, "restart")
-                        .await
+                    run_command_notify(
+                        window_handle,
+                        cx,
+                        log_tx,
+                        device::Command::Reboot,
+                        "restart",
+                    )
+                    .await
                 })
                 .detach();
             })
@@ -178,14 +191,11 @@ impl RootView {
                     .child(self.tab_bar(cx)),
             )
             .child(
-                div()
+                h_flex()
                     .absolute()
                     .top_0()
                     .right(px(TITLEBAR_RIGHT_INSET))
                     .h(px(TITLEBAR_HEIGHT))
-                    .flex()
-                    .flex_row()
-                    .items_center()
                     .gap(px(16.))
                     .child(self.status_indicator())
                     .child(self.restart_button(cx)),
@@ -223,7 +233,7 @@ impl Focusable for RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.selected_tab {
             Tab::Home => self.home_tab.render(&self.state, &self.req_tx),
             Tab::Logs => self
@@ -233,11 +243,9 @@ impl Render for RootView {
             Tab::Info => self.info_tab.render(&self.state),
         };
 
-        let body = div()
+        let body = v_flex()
             .max_w(px(640.))
             .size_full()
-            .flex()
-            .flex_col()
             .pl(px(32.))
             .pr(px(32.))
             .pb(px(32.))
@@ -262,5 +270,14 @@ impl Render for RootView {
             .bg(theme::bg())
             .child(body)
             .child(self.title_bar(cx))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(TITLEBAR_HEIGHT))
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .children(Root::render_notification_layer(window, cx)),
+            )
     }
 }

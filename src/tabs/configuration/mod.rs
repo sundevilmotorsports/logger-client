@@ -11,7 +11,7 @@ use gpui_component::input::Input;
 use gpui_component::label::Label;
 use gpui_component::notification::NotificationType;
 use gpui_component::spinner::Spinner;
-use gpui_component::{Disableable, Sizable, WindowExt};
+use gpui_component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
 
 use crate::device;
 use crate::root_view::RootView;
@@ -76,21 +76,22 @@ impl ConfigurationTab {
             Status::Error(e) => (format!("error: {e}"), theme::red()),
         };
 
-        let mut body = div().flex().flex_col().gap(px(16.));
+        let body: AnyElement =
+            if !self.loaded && self.can_devices.is_empty() && self.adc_channels.is_empty() {
+                super::empty_state("no configuration loaded yet")
+            } else {
+                v_flex()
+                    .gap(px(16.))
+                    .child(self.can_section(cx))
+                    .child(self.adc_section(cx))
+                    .into_any_element()
+            };
 
-        if !self.loaded && self.can_devices.is_empty() && self.adc_channels.is_empty() {
-            body = body.child(Label::new("No configuration loaded yet.").text_color(theme::muted()));
-        } else {
-            body = body.child(self.can_section(cx)).child(self.adc_section(cx));
-        }
-
-        div()
+        v_flex()
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
             .size_full()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
+            .gap(px(12.))
             .child(self.toolbar(log_tx, busy, status_text, status_color, cx))
             .child(
                 div()
@@ -210,27 +211,28 @@ impl ConfigurationTab {
                 .ok();
             });
 
-        let mut status = div().flex().flex_row().items_center().gap(px(6.));
+        let mut status = h_flex().gap(px(6.));
         if busy {
             status = status.child(Spinner::new().xsmall());
         }
         status = status.child(Label::new(status_text).text_color(status_color));
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
+        h_flex()
+            .justify_between()
             .gap(px(8.))
-            .child(refresh_btn)
-            .child(load_btn)
-            .child(save_btn)
-            .child(push_btn)
-            .child(status)
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(refresh_btn)
+                    .child(load_btn)
+                    .child(save_btn),
+            )
+            .child(h_flex().gap(px(12.)).child(status).child(push_btn))
             .into_any_element()
     }
 
     fn can_section(&self, cx: &mut Context<RootView>) -> AnyElement {
-        let mut rows = div().flex().flex_col().gap(px(4.));
+        let mut rows = v_flex().gap(px(4.));
         for (i, d) in self.can_devices.iter().enumerate() {
             rows = rows.child(self.can_device_row(i, d, cx));
         }
@@ -251,9 +253,7 @@ impl ConfigurationTab {
                     .ok();
                 });
 
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .gap(px(6.))
             .child(section_header("CAN devices", add_btn))
             .child(rows)
@@ -311,17 +311,15 @@ impl ConfigurationTab {
         row_container()
             .child(field_label("id"))
             .child(Input::new(&d.id).w(px(90.)))
-            .child(field_label("ext"))
-            .child(ext_checkbox)
-            .child(field_label("fd"))
-            .child(fd_checkbox)
+            .child(ext_checkbox.label("ext"))
+            .child(fd_checkbox.label("fd"))
             .child(Label::new(format!("{signals} signal(s)")).text_color(theme::muted()))
             .child(remove_btn)
             .into_any_element()
     }
 
     fn adc_section(&self, cx: &mut Context<RootView>) -> AnyElement {
-        let mut rows = div().flex().flex_col().gap(px(4.));
+        let mut rows = v_flex().gap(px(4.));
         for (i, c) in self.adc_channels.iter().enumerate() {
             rows = rows.child(self.adc_channel_row(i, c, cx));
         }
@@ -342,9 +340,7 @@ impl ConfigurationTab {
                     .ok();
                 });
 
-        div()
-            .flex()
-            .flex_col()
+        v_flex()
             .gap(px(6.))
             .child(section_header("ADC channels", add_btn))
             .child(rows)

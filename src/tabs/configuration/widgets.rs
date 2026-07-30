@@ -1,13 +1,11 @@
-use gpui::{AnyElement, IntoElement, div, prelude::*, px};
+use gpui::{AnyElement, IntoElement, prelude::*, px};
+use gpui_component::h_flex;
 use gpui_component::label::Label;
 
 use crate::theme;
 
 pub(super) fn section_header(title: &str, add_btn: impl IntoElement) -> AnyElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
+    h_flex()
         .justify_between()
         .child(Label::new(title.to_string()).text_color(theme::fg()))
         .child(add_btn)
@@ -15,10 +13,7 @@ pub(super) fn section_header(title: &str, add_btn: impl IntoElement) -> AnyEleme
 }
 
 pub(super) fn row_container() -> gpui::Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
+    h_flex()
         .gap(px(8.))
         .px(px(8.))
         .py(px(4.))

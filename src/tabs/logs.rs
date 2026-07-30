@@ -1,8 +1,9 @@
 use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::label::Label;
+use gpui_component::list::ListItem;
 use gpui_component::progress::Progress;
-use gpui_component::{Disableable, Sizable};
+use gpui_component::{Disableable, Sizable, h_flex, v_flex};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -50,24 +51,27 @@ impl LogsTab {
         cx: &mut Context<RootView>,
     ) -> AnyElement {
         let (status_text, status_color) = match &self.status {
-            Status::Idle if self.entries.is_empty() => ("no logs yet".to_string(), theme::muted()),
+            Status::Idle if self.entries.is_empty() => (String::new(), theme::muted()),
             Status::Idle => (format!("{} log(s)", self.entries.len()), theme::muted()),
             Status::Loading => ("loading...".to_string(), theme::amber()),
             Status::Error(e) => (format!("error: {e}"), theme::red()),
         };
 
-        let mut rows = div().flex().flex_col().items_start().gap(px(4.));
-        for (idx, entry) in self.entries.iter().enumerate() {
-            rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
-        }
+        let body: AnyElement = if self.entries.is_empty() {
+            super::empty_state("no logs yet")
+        } else {
+            let mut rows = v_flex().items_start().gap(px(2.));
+            for (idx, entry) in self.entries.iter().enumerate() {
+                rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
+            }
+            rows.into_any_element()
+        };
 
-        let mut root = div()
+        let mut root = v_flex()
             .font(theme::mono_font())
             .text_size(px(theme::FONT_SIZE))
             .size_full()
-            .flex()
-            .flex_col()
-            .gap(px(8.))
+            .gap(px(12.))
             .child(self.toolbar(state, req_tx, log_tx, status_text, status_color, cx))
             .child(
                 div()
@@ -75,7 +79,7 @@ impl LogsTab {
                     .overflow_y_scroll()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(rows),
+                    .child(body),
             );
 
         if let Some(result) = &self.last_result {
@@ -146,13 +150,10 @@ impl LogsTab {
                 .detach();
             });
 
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
+        h_flex()
+            .justify_between()
             .gap(px(8.))
-            .child(pause_btn)
-            .child(next_btn)
+            .child(h_flex().gap(px(8.)).child(pause_btn).child(next_btn))
             .child(Label::new(status_text).text_color(status_color))
             .into_any_element()
     }
@@ -207,31 +208,30 @@ impl LogsTab {
                 .ok();
             });
 
-        let row = div()
-            .id(("logs-row", idx))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.))
-            .px(px(8.))
-            .py(px(3.))
+        let row = ListItem::new(("logs-row", idx))
+            .text_size(px(theme::FONT_SIZE))
             .rounded_sm()
-            .hover(|s| s.bg(theme::panel_bg()))
-            .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
             .child(
-                Label::new(format_size(entry.size))
-                    .text_color(theme::muted())
-                    .w(px(64.)),
-            )
-            .child(get_btn);
+                h_flex()
+                    .gap(px(12.))
+                    .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
+                    .child(
+                        Label::new(format_size(entry.size))
+                            .text_color(theme::muted())
+                            .w(px(64.)),
+                    )
+                    .child(get_btn),
+            );
 
         match busy {
-            Some(b) => div()
-                .flex()
-                .flex_col()
+            Some(b) => v_flex()
                 .gap(px(2.))
                 .child(row)
-                .child(progress_bar(b.downloaded, b.total))
+                .child(
+                    div()
+                        .px(px(12.))
+                        .child(progress_bar(b.downloaded, b.total)),
+                )
                 .into_any_element(),
             None => row.into_any_element(),
         }
@@ -324,7 +324,7 @@ fn progress_bar(downloaded: u64, total: u64) -> AnyElement {
     } else {
         downloaded as f32 / total as f32 * 100.
     };
-    Progress::new().value(percent).w(px(120.)).into_any_element()
+    Progress::new().value(percent).w_full().into_any_element()
 }
 
 fn format_size(bytes: u64) -> String {
