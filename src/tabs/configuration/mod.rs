@@ -40,7 +40,7 @@ impl ConfigurationTab {
         cx.spawn(async move |weak, cx| refresh(weak, cx, log_tx).await)
             .detach();
     }
-    
+
     pub(crate) fn auto_fetch(&mut self, log_tx: &device::LogRequestTx, cx: &mut Context<RootView>) {
         if self.fetched_once {
             return;

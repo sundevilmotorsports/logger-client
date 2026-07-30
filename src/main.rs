@@ -33,6 +33,8 @@ fn main() {
     gpui::Application::new()
         .with_assets(Assets)
         .run(|cx: &mut App| {
+            gpui_component::init(cx);
+
             let bounds = Bounds::centered(None, size(px(720.), px(480.)), cx);
             cx.open_window(
                 WindowOptions {
@@ -43,7 +45,10 @@ fn main() {
                     }),
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| root_view::RootView::new(window, cx)),
+                |window, cx| {
+                    let view = cx.new(|cx| root_view::RootView::new(window, cx));
+                    cx.new(|cx| gpui_component::Root::new(view, window, cx))
+                },
             )
             .expect("failed to open window");
 
