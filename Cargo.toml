@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.102"
 gpui = "0.2.2"
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 rust-embed = "8.11.0"
 serialport = "4"
 serde = { version = "1", features = ["derive"] }
