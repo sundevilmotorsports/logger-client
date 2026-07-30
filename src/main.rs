@@ -8,6 +8,7 @@ pub mod theme;
 pub mod toast;
 
 use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
+use gpui_component::theme::{Theme, ThemeMode};
 use rust_embed::RustEmbed;
 
 #[derive(Clone, Copy, RustEmbed)]
@@ -46,6 +47,7 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    Theme::change(ThemeMode::Dark, Some(window), cx);
                     let view = cx.new(|cx| root_view::RootView::new(window, cx));
                     cx.new(|cx| gpui_component::Root::new(view, window, cx))
                 },

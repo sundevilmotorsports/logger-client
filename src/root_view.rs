@@ -2,6 +2,7 @@ use gpui::{
     AnyWindowHandle, App, AsyncApp, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
     Render, WeakEntity, Window, div, prelude::*, px,
 };
+use gpui_component::button::{Button, ButtonVariants};
 use std::time::Duration;
 
 use crate::device::{self, DeviceState};
@@ -160,11 +161,12 @@ impl RootView {
                     .hover(|s| s.text_color(theme::fg()))
                     .cursor_pointer()
                     .child(tab.title())
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         this.selected_tab = tab;
                         this.sync_logs_poll(cx);
                         let log_tx = this.log_tx.clone();
-                        this.configuration_tab.auto_fetch(&log_tx, cx);
+                        this.configuration_tab
+                            .auto_fetch(&log_tx, window.window_handle(), cx);
                         cx.notify();
                     })),
             );
@@ -194,17 +196,20 @@ impl RootView {
 
     fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let log_tx = self.log_tx.clone();
-        theme::button_base("restart-button", "restart")
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .hover(|s| s.text_color(theme::red()).border_color(theme::red()))
-            .on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        Button::new("restart-button")
+            .label("restart")
+            .danger()
+            .ghost()
+            .compact()
+            .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     run_command_toast(weak, cx, log_tx, device::Command::Reboot, "restart").await
                 })
                 .detach();
-            }))
+            })
     }
 
     /// A full-width strip behind the tabs, colored differently from the body.

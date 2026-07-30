@@ -1,4 +1,4 @@
-use gpui::{AsyncApp, PathPromptOptions, WeakEntity};
+use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, PathPromptOptions, WeakEntity};
 use std::path::PathBuf;
 
 use crate::device::{self, Command, Response};
@@ -12,23 +12,27 @@ pub(super) async fn refresh(
     weak: WeakEntity<RootView>,
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
+    window_handle: AnyWindowHandle,
 ) {
     let result = device::request(&log_tx, Command::GetConfig).await;
-    weak.update(cx, |view, cx| {
-        match result {
-            Ok(Response::Config(v)) => {
-                view.configuration_tab.can_devices = can_devices_from_json(&v, cx);
-                view.configuration_tab.adc_channels = adc_channels_from_json(&v, cx);
-                view.configuration_tab.loaded = true;
-                view.configuration_tab.status = Status::Idle;
+    cx.update_window(window_handle, |_, window, cx| {
+        weak.update(cx, |view, cx| {
+            match result {
+                Ok(Response::Config(v)) => {
+                    view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
+                    view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
+                    view.configuration_tab.loaded = true;
+                    view.configuration_tab.status = Status::Idle;
+                }
+                Ok(other) => {
+                    view.configuration_tab.status =
+                        Status::Error(format!("unexpected response: {other:?}"));
+                }
+                Err(e) => view.configuration_tab.status = Status::Error(e.to_string()),
             }
-            Ok(other) => {
-                view.configuration_tab.status =
-                    Status::Error(format!("unexpected response: {other:?}"));
-            }
-            Err(e) => view.configuration_tab.status = Status::Error(e.to_string()),
-        }
-        cx.notify();
+            cx.notify();
+        })
+        .ok();
     })
     .ok();
 }
@@ -61,28 +65,32 @@ pub(super) async fn load_from_file(
     weak: WeakEntity<RootView>,
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
+    window_handle: AnyWindowHandle,
 ) {
     let result = load_from_file_inner(cx, &log_tx).await;
-    weak.update(cx, |view, cx| match result {
-        Ok(Some(v)) => {
-            view.configuration_tab.can_devices = can_devices_from_json(&v, cx);
-            view.configuration_tab.adc_channels = adc_channels_from_json(&v, cx);
-            view.configuration_tab.loaded = true;
-            view.configuration_tab.status = Status::Idle;
-            view.push_toast(cx, "configuration loaded".to_string(), ToastKind::Success);
-        }
-        Ok(None) => {
-            view.configuration_tab.status = Status::Idle; // dialog cancelled
-            cx.notify();
-        }
-        Err(e) => {
-            view.configuration_tab.status = Status::Error(e.to_string());
-            view.push_toast(
-                cx,
-                format!("load configuration failed: {e}"),
-                ToastKind::Error,
-            );
-        }
+    cx.update_window(window_handle, |_, window, cx| {
+        weak.update(cx, |view, cx| match result {
+            Ok(Some(v)) => {
+                view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
+                view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
+                view.configuration_tab.loaded = true;
+                view.configuration_tab.status = Status::Idle;
+                view.push_toast(cx, "configuration loaded".to_string(), ToastKind::Success);
+            }
+            Ok(None) => {
+                view.configuration_tab.status = Status::Idle; // dialog cancelled
+                cx.notify();
+            }
+            Err(e) => {
+                view.configuration_tab.status = Status::Error(e.to_string());
+                view.push_toast(
+                    cx,
+                    format!("load configuration failed: {e}"),
+                    ToastKind::Error,
+                );
+            }
+        })
+        .ok();
     })
     .ok();
 }
@@ -129,28 +137,33 @@ pub(super) async fn save_to_file(
     weak: WeakEntity<RootView>,
     cx: &mut AsyncApp,
     log_tx: device::LogRequestTx,
+    window_handle: AnyWindowHandle,
 ) {
     let result = save_to_file_inner(cx, &log_tx).await;
-    weak.update(cx, |view, cx| {
-        view.configuration_tab.status = Status::Idle;
-        match result {
-            Ok(Some((value, path))) => {
-                view.configuration_tab.can_devices = can_devices_from_json(&value, cx);
-                view.configuration_tab.adc_channels = adc_channels_from_json(&value, cx);
-                view.configuration_tab.loaded = true;
-                view.push_toast(
+    cx.update_window(window_handle, |_, window, cx| {
+        weak.update(cx, |view, cx| {
+            view.configuration_tab.status = Status::Idle;
+            match result {
+                Ok(Some((value, path))) => {
+                    view.configuration_tab.can_devices = can_devices_from_json(&value, window, cx);
+                    view.configuration_tab.adc_channels =
+                        adc_channels_from_json(&value, window, cx);
+                    view.configuration_tab.loaded = true;
+                    view.push_toast(
+                        cx,
+                        format!("saved to {}", path.display()),
+                        ToastKind::Success,
+                    );
+                }
+                Ok(None) => cx.notify(), // dialog cancelled
+                Err(e) => view.push_toast(
                     cx,
-                    format!("saved to {}", path.display()),
-                    ToastKind::Success,
-                );
+                    format!("save configuration failed: {e}"),
+                    ToastKind::Error,
+                ),
             }
-            Ok(None) => cx.notify(), // dialog cancelled
-            Err(e) => view.push_toast(
-                cx,
-                format!("save configuration failed: {e}"),
-                ToastKind::Error,
-            ),
-        }
+        })
+        .ok();
     })
     .ok();
 }

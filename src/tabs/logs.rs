@@ -1,4 +1,6 @@
 use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
+use gpui_component::Disableable;
+use gpui_component::button::Button;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -101,10 +103,14 @@ impl LogsTab {
         };
         let resume = !matches!(state.logging_active, Some(true));
         let pause_log_tx = log_tx.clone();
-        let mut pause_btn =
-            theme::button("logs-pause", pause_label).on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        let pause_btn = Button::new("logs-pause")
+            .label(pause_label)
+            .disabled(!pause_active)
+            .on_click(move |_, _, app| {
                 let log_tx = pause_log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     let label = if resume { "resume" } else { "pause" };
                     root_view::run_command_toast(
                         weak,
@@ -116,16 +122,16 @@ impl LogsTab {
                     .await
                 })
                 .detach();
-            }));
-        if !pause_active {
-            pause_btn = pause_btn.text_color(theme::muted().opacity(0.4));
-        }
+            });
 
         let next_log_tx = log_tx.clone();
-        let next_btn =
-            theme::button("logs-next", "new log").on_click(cx.listener(move |_, _, _, cx| {
+        let weak = cx.weak_entity();
+        let next_btn = Button::new("logs-next")
+            .label("new log")
+            .on_click(move |_, _, app| {
                 let log_tx = next_log_tx.clone();
-                cx.spawn(async move |weak, cx| {
+                let weak = weak.clone();
+                app.spawn(async move |cx| {
                     root_view::run_command_toast(
                         weak,
                         cx,
@@ -136,7 +142,7 @@ impl LogsTab {
                     .await
                 })
                 .detach();
-            }));
+            });
 
         div()
             .flex()
@@ -171,24 +177,31 @@ impl LogsTab {
         let log_tx = log_tx.clone();
         let name = entry.name.clone();
         let total = entry.size;
-        let get_btn =
-            theme::button(("logs-get", idx), label).on_click(cx.listener(move |this, _, _, cx| {
-                if this.logs_tab.busy.is_some() {
-                    return;
-                }
-                this.logs_tab.busy = Some(Busy {
-                    name: name.clone(),
-                    downloaded: 0,
-                    total,
-                });
-                this.logs_tab.last_result = None;
-                cx.notify();
-
+        let weak = cx.weak_entity();
+        let get_btn = Button::new(("logs-get", idx))
+            .label(label)
+            .disabled(busy.is_some())
+            .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
                 let name = name.clone();
-                cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
-                    .detach();
-            }));
+                let weak = weak.clone();
+                weak.update(app, |this, cx| {
+                    if this.logs_tab.busy.is_some() {
+                        return;
+                    }
+                    this.logs_tab.busy = Some(Busy {
+                        name: name.clone(),
+                        downloaded: 0,
+                        total,
+                    });
+                    this.logs_tab.last_result = None;
+                    cx.notify();
+
+                    cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
+                        .detach();
+                })
+                .ok();
+            });
 
         let row = div()
             .id(("logs-row", idx))

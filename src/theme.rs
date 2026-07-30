@@ -1,6 +1,4 @@
-use gpui::{
-    Div, ElementId, Font, FontFallbacks, Hsla, SharedString, Stateful, div, prelude::*, px, rgb,
-};
+use gpui::{Div, Font, FontFallbacks, Hsla, div, prelude::*, px, rgb};
 
 pub fn mono_font() -> Font {
     Font {
@@ -43,24 +41,6 @@ pub fn amber() -> Hsla {
 }
 pub fn red() -> Hsla {
     rgb(0xc85050).into()
-}
-
-/// Bordered chip button without a hover style
-pub fn button_base(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    div()
-        .id(id)
-        .px(px(8.))
-        .py(px(2.))
-        .rounded_sm()
-        .border_1()
-        .border_color(border())
-        .text_color(muted())
-        .cursor_pointer()
-        .child(label.into())
-}
-
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
-    button_base(id, label).hover(|s| s.text_color(fg()).border_color(muted()).bg(panel_bg()))
 }
 
 /// Shared card container for tab content.
