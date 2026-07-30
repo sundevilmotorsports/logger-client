@@ -100,7 +100,7 @@ impl LogsTab {
         log_tx: &device::LogRequestTx,
         status_text: String,
         status_color: gpui::Hsla,
-        _cx: &mut Context<RootView>,
+        cx: &mut Context<RootView>,
     ) -> AnyElement {
         let (pause_label, pause_active) = match state.logging_active {
             Some(true) => ("pause", true),
@@ -109,17 +109,18 @@ impl LogsTab {
         };
         let resume = !matches!(state.logging_active, Some(true));
         let pause_log_tx = log_tx.clone();
+        let weak = cx.weak_entity();
         let pause_btn = Button::new("logs-pause")
             .label(pause_label)
             .small()
             .disabled(!pause_active)
-            .on_click(move |_, window, app| {
+            .on_click(move |_, _, app| {
                 let log_tx = pause_log_tx.clone();
-                let window_handle = window.window_handle();
+                let weak = weak.clone();
                 app.spawn(async move |cx| {
                     let label = if resume { "resume" } else { "pause" };
-                    root_view::run_command_notify(
-                        window_handle,
+                    root_view::run_command_toast(
+                        weak,
                         cx,
                         log_tx,
                         device::Command::SetLogging { active: resume },
@@ -131,15 +132,16 @@ impl LogsTab {
             });
 
         let next_log_tx = log_tx.clone();
+        let weak = cx.weak_entity();
         let next_btn = Button::new("logs-next")
             .label("new log")
             .small()
-            .on_click(move |_, window, app| {
+            .on_click(move |_, _, app| {
                 let log_tx = next_log_tx.clone();
-                let window_handle = window.window_handle();
+                let weak = weak.clone();
                 app.spawn(async move |cx| {
-                    root_view::run_command_notify(
-                        window_handle,
+                    root_view::run_command_toast(
+                        weak,
                         cx,
                         log_tx,
                         device::Command::NextLog,

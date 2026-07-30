@@ -5,6 +5,7 @@ pub mod log_parse;
 pub mod root_view;
 pub mod tabs;
 pub mod theme;
+pub mod toast;
 
 use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
 use gpui_component::theme::{Theme, ThemeMode};

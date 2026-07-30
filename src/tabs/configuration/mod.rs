@@ -2,20 +2,18 @@ mod commands;
 mod model;
 mod widgets;
 
-use gpui::{
-    AnyElement, AnyWindowHandle, Context, Hsla, IntoElement, SharedString, div, prelude::*, px,
-};
+use gpui::{AnyElement, AnyWindowHandle, Context, Hsla, IntoElement, div, prelude::*, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::input::Input;
 use gpui_component::label::Label;
-use gpui_component::notification::NotificationType;
 use gpui_component::spinner::Spinner;
-use gpui_component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_component::{Disableable, Sizable, h_flex, v_flex};
 
 use crate::device;
 use crate::root_view::RootView;
 use crate::theme;
+use crate::toast::ToastKind;
 use commands::{load_from_file, push_to_device, refresh, save_to_file};
 use model::{AdcChannelForm, CanDeviceForm, build_config_json, signal_count};
 use widgets::{field_label, row_container, section_header};
@@ -181,9 +179,8 @@ impl ConfigurationTab {
             .primary()
             .small()
             .disabled(busy)
-            .on_click(move |_, window, app| {
+            .on_click(move |_, _, app| {
                 let log_tx = push_tx.clone();
-                let window_handle = window.window_handle();
                 weak.update(app, |this, cx| {
                     if matches!(this.configuration_tab.status, Status::Loading) {
                         return;
@@ -191,22 +188,14 @@ impl ConfigurationTab {
                     let value = match build_config_json(&this.configuration_tab, cx) {
                         Ok(v) => v,
                         Err(e) => {
-                            window.push_notification(
-                                (
-                                    NotificationType::Error,
-                                    SharedString::from(format!("push failed: {e}")),
-                                ),
-                                cx,
-                            );
+                            this.push_toast(cx, format!("push failed: {e}"), ToastKind::Error);
                             return;
                         }
                     };
                     this.configuration_tab.status = Status::Loading;
                     cx.notify();
-                    cx.spawn(async move |weak, cx| {
-                        push_to_device(weak, cx, log_tx, value, window_handle).await
-                    })
-                    .detach();
+                    cx.spawn(async move |weak, cx| push_to_device(weak, cx, log_tx, value).await)
+                        .detach();
                 })
                 .ok();
             });
