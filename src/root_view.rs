@@ -163,6 +163,8 @@ impl RootView {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_tab = tab;
                         this.sync_logs_poll(cx);
+                        let log_tx = this.log_tx.clone();
+                        this.configuration_tab.auto_fetch(&log_tx, cx);
                         cx.notify();
                     })),
             );
@@ -286,9 +288,14 @@ impl Render for RootView {
 
         div()
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, _| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                // Key events bubble from whatever's focused up through this
+                // root handler, so without this check typing "q" into a
+                // Configuration tab text field would quit the app.
+                let root_focused = window.focused(cx).is_none_or(|f| f == this.focus_handle);
                 let m = &event.keystroke.modifiers;
-                if event.keystroke.key == "q" && !m.control && !m.platform && !m.alt {
+                if root_focused && event.keystroke.key == "q" && !m.control && !m.platform && !m.alt
+                {
                     std::process::exit(0);
                 }
             }))
