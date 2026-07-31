@@ -9,7 +9,7 @@ use gpui_component::{Sizable, h_flex, v_flex};
 use std::time::Duration;
 
 use crate::device::{self, DeviceState};
-use crate::tabs::{ConfigurationTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
+use crate::tabs::{ConfigurationTab, ConsoleTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
 use crate::toast::{self, Toast, ToastKind};
 
@@ -23,6 +23,7 @@ pub struct RootView {
     focus_handle: FocusHandle,
     home_tab: HomeTab,
     pub(crate) logs_tab: LogsTab,
+    pub(crate) console_tab: ConsoleTab,
     pub(crate) configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
@@ -68,7 +69,7 @@ impl RootView {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window);
 
-        Self {
+        let mut this = Self {
             state: DeviceState::default(),
             req_tx,
             log_tx,
@@ -76,12 +77,16 @@ impl RootView {
             focus_handle,
             home_tab: HomeTab::default(),
             logs_tab: LogsTab::default(),
+            console_tab: ConsoleTab::default(),
             configuration_tab: ConfigurationTab::default(),
             info_tab: DeviceInfoTab::default(),
             logs_poll: None,
             toasts: Vec::new(),
             next_toast_id: 0,
-        }
+        };
+        
+        this.console_tab.start(cx);
+        this
     }
 
     pub(crate) fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
@@ -251,12 +256,15 @@ impl Render for RootView {
             Tab::Logs => self
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
+            Tab::Console => self.console_tab.render(cx),
             Tab::Configuration => self.configuration_tab.render(&self.log_tx, cx),
             Tab::Info => self.info_tab.render(&self.state),
         };
 
+        // The Console tab wants the full window width for its log lines;
+        // every other tab stays capped to a comfortable reading column.
         let body = v_flex()
-            .max_w(px(640.))
+            .when(self.selected_tab != Tab::Console, |el| el.max_w(px(640.)))
             .size_full()
             .pl(px(32.))
             .pr(px(32.))

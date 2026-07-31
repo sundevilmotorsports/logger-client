@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::borrow::Cow;
+pub mod console;
 pub mod device;
 pub mod log_parse;
 pub mod root_view;
