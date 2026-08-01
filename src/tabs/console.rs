@@ -1,6 +1,6 @@
 use gpui::{
-    AnyElement, Context, IntoElement, ListSizingBehavior, Pixels, Task, UniformListScrollHandle,
-    div, prelude::*, px, uniform_list,
+    AnyElement, Context, Hsla, IntoElement, ListSizingBehavior, Pixels, Task,
+    UniformListScrollHandle, div, prelude::*, px, uniform_list,
 };
 use gpui_component::label::Label;
 use gpui_component::scroll::ScrollableElement;
@@ -40,6 +40,19 @@ impl Level {
             _ => None,
         }
     }
+
+    fn color(self) -> Hsla {
+        match self {
+            Level::Error => theme::red(),
+            Level::Warn => theme::amber(),
+            Level::Info => theme::fg(),
+            Level::Debug => theme::muted(),
+        }
+    }
+}
+
+fn line_color(line: &str) -> Hsla {
+    Level::parse(line).map_or(theme::fg(), Level::color)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -280,6 +293,7 @@ impl ConsoleTab {
                         uniform_list("console-lines", count, move |range, _window, _cx| {
                             range
                                 .map(|ix| {
+                                    let line = &lines[visible[ix]];
                                     div()
                                         .h(ROW_HEIGHT)
                                         .px(px(8.))
@@ -287,8 +301,8 @@ impl ConsoleTab {
                                         .items_center()
                                         .overflow_hidden()
                                         .child(
-                                            Label::new(lines[visible[ix]].clone())
-                                                .text_color(theme::fg())
+                                            Label::new(line.clone())
+                                                .text_color(line_color(line))
                                                 .whitespace_nowrap(),
                                         )
                                 })
