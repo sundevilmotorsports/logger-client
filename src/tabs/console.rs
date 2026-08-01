@@ -5,6 +5,7 @@ use gpui::{
 use gpui_component::label::Label;
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::spinner::Spinner;
+use gpui_component::tab::TabBar;
 use gpui_component::{Sizable, h_flex, v_flex};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,10 +17,84 @@ use crate::theme;
 const POLL_INTERVAL: Duration = Duration::from_millis(350);
 const ROW_HEIGHT: Pixels = px(20.);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Level {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl Level {
+    fn parse(line: &str) -> Option<Level> {
+        let mut chars = line.chars();
+        let letter = chars.next()?;
+        if chars.next() != Some(' ') || chars.next() != Some('(') {
+            return None;
+        }
+        match letter {
+            'E' => Some(Level::Error),
+            'W' => Some(Level::Warn),
+            'I' => Some(Level::Info),
+            'D' => Some(Level::Debug),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum LevelFilter {
+    #[default]
+    All,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl LevelFilter {
+    const ALL: [LevelFilter; 5] = [
+        LevelFilter::All,
+        LevelFilter::Debug,
+        LevelFilter::Info,
+        LevelFilter::Warn,
+        LevelFilter::Error,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            LevelFilter::All => "all",
+            LevelFilter::Debug => "debug",
+            LevelFilter::Info => "info",
+            LevelFilter::Warn => "warn",
+            LevelFilter::Error => "error",
+        }
+    }
+
+    fn min_level(self) -> Option<Level> {
+        match self {
+            LevelFilter::All => None,
+            LevelFilter::Debug => Some(Level::Debug),
+            LevelFilter::Info => Some(Level::Info),
+            LevelFilter::Warn => Some(Level::Warn),
+            LevelFilter::Error => Some(Level::Error),
+        }
+    }
+
+    /// Lines whose level cant be parsed only show under all
+    fn matches(self, line: &str) -> bool {
+        match self.min_level() {
+            None => true,
+            Some(min) => Level::parse(line).is_some_and(|lvl| lvl >= min),
+        }
+    }
+}
+
 pub struct ConsoleTab {
     connected_port: Option<String>,
     lines: Arc<Vec<String>>,
     last_line_count: usize,
+    filter: LevelFilter,
     scroll_handle: UniformListScrollHandle,
     task: Option<Task<()>>,
 }
@@ -30,6 +105,7 @@ impl Default for ConsoleTab {
             connected_port: None,
             lines: Arc::new(Vec::new()),
             last_line_count: 0,
+            filter: LevelFilter::default(),
             scroll_handle: UniformListScrollHandle::default(),
             task: None,
         }
@@ -51,18 +127,14 @@ impl ConsoleTab {
                     if let Some(name) = console::find_port() {
                         break name;
                     }
-                    cx.background_executor()
-                        .timer(Duration::from_secs(1))
-                        .await;
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
                 };
 
                 let port = match console::open(&port_name) {
                     Ok(port) => port,
                     Err(e) => {
                         log::warn!("console: failed to open {port_name}: {e}");
-                        cx.background_executor()
-                            .timer(Duration::from_secs(1))
-                            .await;
+                        cx.background_executor().timer(Duration::from_secs(1)).await;
                         continue;
                     }
                 };
@@ -120,11 +192,34 @@ impl ConsoleTab {
         }));
     }
 
-    pub fn render(&mut self, _cx: &mut Context<RootView>) -> AnyElement {
+    pub fn render(&mut self, cx: &mut Context<RootView>) -> AnyElement {
         match self.connected_port.clone() {
-            Some(port) => self.log_view(port),
+            Some(port) => self.log_view(port, cx),
             None => self.waiting_view(),
         }
+    }
+
+    fn filter_bar(&self, cx: &mut Context<RootView>) -> impl IntoElement {
+        let weak = cx.weak_entity();
+        let selected_index = LevelFilter::ALL
+            .iter()
+            .position(|f| *f == self.filter)
+            .unwrap_or(0);
+        TabBar::new("console-level-filter")
+            .underline()
+            .small()
+            .font(theme::mono_font())
+            .text_size(px(theme::FONT_SIZE))
+            .selected_index(selected_index)
+            .children(LevelFilter::ALL.map(|f| f.title()))
+            .on_click(move |ix, _window, app| {
+                let filter = LevelFilter::ALL[*ix];
+                weak.update(app, |root, cx| {
+                    root.console_tab.filter = filter;
+                    cx.notify();
+                })
+                .ok();
+            })
     }
 
     fn waiting_view(&self) -> AnyElement {
@@ -140,8 +235,16 @@ impl ConsoleTab {
             .into_any_element()
     }
 
-    fn log_view(&mut self, port: String) -> AnyElement {
-        let count = self.lines.len();
+    fn log_view(&mut self, port: String, cx: &mut Context<RootView>) -> AnyElement {
+        let filter = self.filter;
+        let lines = self.lines.clone();
+        let visible: Arc<Vec<usize>> = Arc::new(
+            (0..lines.len())
+                .filter(|&ix| filter.matches(&lines[ix]))
+                .collect(),
+        );
+
+        let count = visible.len();
         let grew = count > self.last_line_count;
         self.last_line_count = count;
 
@@ -149,7 +252,6 @@ impl ConsoleTab {
             scroll_to_bottom(&self.scroll_handle);
         }
 
-        let lines = self.lines.clone();
         let scroll_handle = self.scroll_handle.clone();
 
         v_flex()
@@ -161,10 +263,9 @@ impl ConsoleTab {
                 h_flex()
                     .gap(px(6.))
                     .child(div().text_color(theme::green()).child("●"))
-                    .child(
-                        Label::new(format!("connected: {port}")).text_color(theme::muted()),
-                    ),
+                    .child(Label::new(format!("connected: {port}")).text_color(theme::muted())),
             )
+            .child(self.filter_bar(cx))
             .child(
                 div()
                     .id("console-log")
@@ -186,7 +287,7 @@ impl ConsoleTab {
                                         .items_center()
                                         .overflow_hidden()
                                         .child(
-                                            Label::new(lines[ix].clone())
+                                            Label::new(lines[visible[ix]].clone())
                                                 .text_color(theme::fg())
                                                 .whitespace_nowrap(),
                                         )
