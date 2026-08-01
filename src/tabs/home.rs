@@ -3,7 +3,7 @@ use gpui_component::description_list::DescriptionList;
 use gpui_component::label::Label;
 use gpui_component::{Sizable, h_flex};
 
-use crate::device::{self, DeviceState, DeviceStatusFlags};
+use crate::device::{self, DeviceState, DeviceStatusFlags, Resources};
 use crate::theme::{self, FONT_SIZE};
 
 fn format_uptime(secs: u64) -> String {
@@ -13,6 +13,35 @@ fn format_uptime(secs: u64) -> String {
     } else {
         format!("{m}:{s:02}")
     }
+}
+
+fn format_kb(bytes: u32) -> String {
+    format!("{} KB", bytes / 1024)
+}
+
+fn resources_row(resources: Option<Resources>) -> AnyElement {
+    let Some(r) = resources else {
+        return Label::new("—").text_color(theme::muted()).into_any_element();
+    };
+
+    let mut row = h_flex().gap(px(12.));
+    row = row.child(
+        Label::new(format!(
+            "heap {} (min {})",
+            format_kb(r.heap_free),
+            format_kb(r.heap_min_free)
+        ))
+        .text_color(theme::fg()),
+    );
+    for (i, load) in r.cpu_load.iter().enumerate() {
+        let color = match load {
+            l if *l >= 90.0 => theme::red(),
+            l if *l >= 70.0 => theme::amber(),
+            _ => theme::green(),
+        };
+        row = row.child(Label::new(format!("core{i} {load:.0}%")).text_color(color));
+    }
+    row.into_any_element()
 }
 
 fn value(text: String, color: Hsla) -> AnyElement {
@@ -105,6 +134,7 @@ impl HomeTab {
                     .item("port", value(port, theme::fg()), 1)
                     .item("uptime", value(uptime, theme::fg()), 1)
                     .item("health", health_row(state.status), 1)
+                    .item("resources", resources_row(state.resources.clone()), 1)
                     .item("logging", value(logging, logging_color), 1)
                     .item("file", value(current_log, theme::fg()), 1)
                     .item("gps", value(gps_str, gps_color), 1)

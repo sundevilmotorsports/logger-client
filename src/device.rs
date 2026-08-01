@@ -16,6 +16,7 @@ pub enum Command {
     Uptime,
     Gps,
     Imu,
+    Resources,
     ListLogs,
     LogChunk { name: String, offset: u64 },
     LogStatus,
@@ -38,6 +39,7 @@ pub enum Response {
     Uptime { uptime_seconds: u64 },
     Gps(GpsFix),
     Imu(ImuReading),
+    Resources(Resources),
     Logs(Vec<LogEntry>),
     LogChunk { data: Vec<u8>, eof: bool },
     LogStatus { active: bool, current: String },
@@ -61,6 +63,13 @@ pub struct GpsFix {
     pub lon: f64,
     pub alt_m: f64,
     pub sats: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Resources {
+    pub heap_free: u32,
+    pub heap_min_free: u32,
+    pub cpu_load: [f32; 2],
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -159,6 +168,10 @@ impl Connection {
             Command::Imu => Response::Imu(
                 serde_json::from_value(data.clone())
                     .map_err(|e| anyhow!("bad imu data ({e}): {data}"))?,
+            ),
+            Command::Resources => Response::Resources(
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad resources data ({e}): {data}"))?,
             ),
             Command::ListLogs => Response::Logs(
                 serde_json::from_value(data.clone())
@@ -292,6 +305,7 @@ pub struct DeviceState {
     pub logging_active: Option<bool>,
     pub current_log: Option<String>,
     pub status: Option<DeviceStatusFlags>,
+    pub resources: Option<Resources>,
 }
 
 pub fn poll(
@@ -380,6 +394,10 @@ pub fn poll(
                         };
                         state.status = match conn.request(Command::Status) {
                             Ok(Response::Status { subsystems, .. }) => Some(subsystems),
+                            _ => None,
+                        };
+                        state.resources = match conn.request(Command::Resources) {
+                            Ok(Response::Resources(r)) => Some(r),
                             _ => None,
                         };
                         match conn.request(Command::LogStatus) {
