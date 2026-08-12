@@ -261,10 +261,14 @@ impl Render for RootView {
             Tab::Info => self.info_tab.render(&self.state),
         };
 
-        // The Console tab wants the full window width for its log lines;
-        // every other tab stays capped to a comfortable reading column.
+        // Console wants the full window width for its log lines, and
+        // Configuration needs it for the CAN reference panel; every other
+        // tab stays capped to a comfortable reading column.
         let body = v_flex()
-            .when(self.selected_tab != Tab::Console, |el| el.max_w(px(640.)))
+            .when(
+                !matches!(self.selected_tab, Tab::Console | Tab::Configuration),
+                |el| el.max_w(px(640.)),
+            )
             .size_full()
             .pl(px(32.))
             .pr(px(32.))

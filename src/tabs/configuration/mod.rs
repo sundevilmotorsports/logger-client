@@ -19,7 +19,7 @@ use model::{
     AdcChannelForm, CanDeviceForm, SignalForm, SignalGroupForm, SignalsForm, build_config_json,
     signal_count,
 };
-use widgets::{field_label, indented_col, row_container, section_header};
+use widgets::{can_help_panel, field_label, indented_col, row_container, section_header};
 
 #[derive(Default)]
 enum Status {
@@ -95,12 +95,21 @@ impl ConfigurationTab {
             .gap(px(12.))
             .child(self.toolbar(log_tx, busy, status_text, status_color, cx))
             .child(
-                div()
-                    .id("config-scroll")
-                    .overflow_y_scroll()
+                h_flex()
+                    .w_full()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(body),
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .id("config-scroll")
+                            .overflow_y_scroll()
+                            .flex_1()
+                            .max_w(px(640.))
+                            .min_h(px(0.))
+                            .child(body),
+                    )
+                    .child(can_help_panel()),
             )
             .into_any_element()
     }
