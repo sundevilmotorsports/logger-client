@@ -98,7 +98,7 @@ pub(super) fn can_help_panel() -> AnyElement {
     v_flex()
         .id("can-help-panel")
         .overflow_y_scroll()
-        .w(px(420.))
+        .w(px(480.))
         .flex_shrink_0()
         .h_full()
         .gap(px(14.))

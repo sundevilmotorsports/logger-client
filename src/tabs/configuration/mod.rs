@@ -99,6 +99,7 @@ impl ConfigurationTab {
                     .w_full()
                     .flex_1()
                     .min_h(px(0.))
+                    .justify_between()
                     .gap(px(12.))
                     .child(
                         div()
