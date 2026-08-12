@@ -14,11 +14,16 @@ pub(super) fn section_header(title: &str, add_btn: impl IntoElement) -> AnyEleme
 
 pub(super) fn row_container() -> gpui::Div {
     h_flex()
+        .flex_wrap()
         .gap(px(8.))
         .px(px(8.))
         .py(px(4.))
         .rounded_sm()
         .bg(theme::panel_bg())
+}
+
+pub(super) fn indented_row() -> gpui::Div {
+    row_container().ml(px(20.))
 }
 
 pub(super) fn field_label(text: &str) -> AnyElement {

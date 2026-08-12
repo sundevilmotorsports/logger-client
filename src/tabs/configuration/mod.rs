@@ -2,21 +2,24 @@ mod commands;
 mod model;
 mod widgets;
 
-use gpui::{AnyElement, AnyWindowHandle, Context, Hsla, IntoElement, div, prelude::*, px};
+use gpui::{AnyElement, AnyWindowHandle, Context, Entity, Hsla, IntoElement, div, prelude::*, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
-use gpui_component::input::Input;
+use gpui_component::input::{Input, InputState};
 use gpui_component::label::Label;
 use gpui_component::spinner::Spinner;
-use gpui_component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_component::{Disableable, Selectable, Sizable, h_flex, v_flex};
 
 use crate::device;
 use crate::root_view::RootView;
 use crate::theme;
 use crate::toast::ToastKind;
 use commands::{load_from_file, push_to_device, refresh, save_to_file};
-use model::{AdcChannelForm, CanDeviceForm, build_config_json, signal_count};
-use widgets::{field_label, row_container, section_header};
+use model::{
+    AdcChannelForm, CanDeviceForm, SignalForm, SignalGroupForm, SignalsForm, build_config_json,
+    signal_count,
+};
+use widgets::{field_label, indented_row, row_container, section_header};
 
 #[derive(Default)]
 enum Status {
@@ -223,7 +226,11 @@ impl ConfigurationTab {
     fn can_section(&self, cx: &mut Context<RootView>) -> AnyElement {
         let mut rows = v_flex().gap(px(4.));
         for (i, d) in self.can_devices.iter().enumerate() {
-            rows = rows.child(self.can_device_row(i, d, cx));
+            let mut block = v_flex().gap(px(2.)).child(self.can_device_row(i, d, cx));
+            if d.expanded {
+                block = block.child(self.signals_editor(i, d, cx));
+            }
+            rows = rows.child(block);
         }
 
         let weak = cx.weak_entity();
@@ -297,12 +304,295 @@ impl ConfigurationTab {
                     .ok();
                 });
 
+        let weak = cx.weak_entity();
+        let expand_btn = Button::new(("can-expand", i))
+            .label(if d.expanded {
+                format!("▾ {signals} signal(s)")
+            } else {
+                format!("▸ {signals} signal(s)")
+            })
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    let dev = &mut this.configuration_tab.can_devices[i];
+                    dev.expanded = !dev.expanded;
+                    cx.notify();
+                })
+                .ok();
+            });
+
         row_container()
             .child(field_label("id"))
             .child(Input::new(&d.id).w(px(90.)))
             .child(ext_checkbox.label("ext"))
             .child(fd_checkbox.label("fd"))
-            .child(Label::new(format!("{signals} signal(s)")).text_color(theme::muted()))
+            .child(expand_btn)
+            .child(remove_btn)
+            .into_any_element()
+    }
+
+    fn signals_editor(&self, dev_i: usize, d: &CanDeviceForm, cx: &mut Context<RootView>) -> AnyElement {
+        let is_muxed = matches!(d.signals, SignalsForm::Muxed { .. });
+
+        let weak = cx.weak_entity();
+        let fixed_mode_btn = Button::new(("sig-mode-fixed", dev_i))
+            .label("Fixed")
+            .small()
+            .selected(!is_muxed)
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab.can_devices[dev_i].signals =
+                        SignalsForm::Fixed(Vec::new());
+                    cx.notify();
+                })
+                .ok();
+            });
+        let weak = cx.weak_entity();
+        let muxed_mode_btn = Button::new(("sig-mode-muxed", dev_i))
+            .label("Muxed")
+            .small()
+            .selected(is_muxed)
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab.can_devices[dev_i].signals =
+                        SignalsForm::empty_muxed(window, cx);
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        let body = match &d.signals {
+            SignalsForm::Fixed(sigs) => self.fixed_signals_body(dev_i, sigs, cx),
+            SignalsForm::Muxed { byte, groups } => {
+                self.muxed_signals_body(dev_i, byte, groups, cx)
+            }
+        };
+
+        indented_row()
+            .flex_col()
+            .items_start()
+            .gap(px(6.))
+            .child(h_flex().gap(px(6.)).child(fixed_mode_btn).child(muxed_mode_btn))
+            .child(body)
+            .into_any_element()
+    }
+
+    fn fixed_signals_body(
+        &self,
+        dev_i: usize,
+        sigs: &[SignalForm],
+        cx: &mut Context<RootView>,
+    ) -> AnyElement {
+        let mut rows = v_flex().gap(px(4.));
+        for (i, s) in sigs.iter().enumerate() {
+            rows = rows.child(self.signal_row(dev_i, None, i, s, cx));
+        }
+
+        let weak = cx.weak_entity();
+        let add_btn = Button::new(("sig-add", dev_i))
+            .label("+ signal")
+            .ghost()
+            .small()
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    if let SignalsForm::Fixed(sigs) =
+                        &mut this.configuration_tab.can_devices[dev_i].signals
+                    {
+                        sigs.push(SignalForm::new(window, cx));
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        v_flex().gap(px(4.)).child(rows).child(add_btn).into_any_element()
+    }
+
+    fn muxed_signals_body(
+        &self,
+        dev_i: usize,
+        byte: &Entity<InputState>,
+        groups: &[SignalGroupForm],
+        cx: &mut Context<RootView>,
+    ) -> AnyElement {
+        let mut rows = v_flex().gap(px(6.));
+        for (gi, g) in groups.iter().enumerate() {
+            rows = rows.child(self.muxed_group_row(dev_i, gi, g, cx));
+        }
+
+        let weak = cx.weak_entity();
+        let add_group_btn = Button::new(("group-add", dev_i))
+            .label("+ group")
+            .ghost()
+            .small()
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    if let SignalsForm::Muxed { groups, .. } =
+                        &mut this.configuration_tab.can_devices[dev_i].signals
+                    {
+                        groups.push(SignalGroupForm {
+                            type_val: cx
+                                .new(|cx| InputState::new(window, cx).default_value("0")),
+                            signals: Vec::new(),
+                        });
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        v_flex()
+            .gap(px(6.))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(field_label("discriminator byte"))
+                    .child(Input::new(byte).w(px(50.))),
+            )
+            .child(rows)
+            .child(add_group_btn)
+            .into_any_element()
+    }
+
+    fn muxed_group_row(
+        &self,
+        dev_i: usize,
+        group_i: usize,
+        g: &SignalGroupForm,
+        cx: &mut Context<RootView>,
+    ) -> AnyElement {
+        let weak = cx.weak_entity();
+        let remove_group_btn = Button::new(("group-remove", dev_i * 1000 + group_i))
+            .label("remove group")
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    if let SignalsForm::Muxed { groups, .. } =
+                        &mut this.configuration_tab.can_devices[dev_i].signals
+                    {
+                        groups.remove(group_i);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        let mut rows = v_flex().gap(px(4.));
+        for (i, s) in g.signals.iter().enumerate() {
+            rows = rows.child(self.signal_row(dev_i, Some(group_i), i, s, cx));
+        }
+
+        let weak = cx.weak_entity();
+        let add_sig_btn = Button::new(("group-sig-add", dev_i * 1000 + group_i))
+            .label("+ signal")
+            .ghost()
+            .small()
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    if let SignalsForm::Muxed { groups, .. } =
+                        &mut this.configuration_tab.can_devices[dev_i].signals
+                    {
+                        groups[group_i].signals.push(SignalForm::new(window, cx));
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        indented_row()
+            .flex_col()
+            .items_start()
+            .gap(px(4.))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(field_label("type_val"))
+                    .child(Input::new(&g.type_val).w(px(50.)))
+                    .child(remove_group_btn),
+            )
+            .child(rows)
+            .child(add_sig_btn)
+            .into_any_element()
+    }
+
+    fn signal_row(
+        &self,
+        dev_i: usize,
+        group_i: Option<usize>,
+        sig_i: usize,
+        s: &SignalForm,
+        cx: &mut Context<RootView>,
+    ) -> AnyElement {
+        let key = match group_i {
+            Some(gi) => dev_i * 1_000_000 + (gi + 1) * 1000 + sig_i,
+            None => dev_i * 1_000_000 + sig_i,
+        };
+
+        let weak = cx.weak_entity();
+        let signed_checkbox = Checkbox::new(("sig-signed", key))
+            .checked(s.signed)
+            .on_click(move |checked, _, app| {
+                let checked = *checked;
+                weak.update(app, |this, cx| {
+                    set_signal_mut(&mut this.configuration_tab.can_devices, dev_i, group_i, sig_i, |s| {
+                        s.signed = checked;
+                    });
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        let weak = cx.weak_entity();
+        let be_checkbox = Checkbox::new(("sig-be", key))
+            .checked(s.big_endian)
+            .on_click(move |checked, _, app| {
+                let checked = *checked;
+                weak.update(app, |this, cx| {
+                    set_signal_mut(&mut this.configuration_tab.can_devices, dev_i, group_i, sig_i, |s| {
+                        s.big_endian = checked;
+                    });
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        let weak = cx.weak_entity();
+        let remove_btn = Button::new(("sig-remove", key))
+            .label("remove")
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    let dev = &mut this.configuration_tab.can_devices[dev_i];
+                    match (&mut dev.signals, group_i) {
+                        (SignalsForm::Fixed(sigs), None) => {
+                            sigs.remove(sig_i);
+                        }
+                        (SignalsForm::Muxed { groups, .. }, Some(gi)) => {
+                            groups[gi].signals.remove(sig_i);
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                })
+                .ok();
+            });
+
+        indented_row()
+            .child(field_label("name"))
+            .child(Input::new(&s.name).w(px(90.)))
+            .child(field_label("start"))
+            .child(Input::new(&s.start).w(px(40.)))
+            .child(field_label("len"))
+            .child(Input::new(&s.len).w(px(40.)))
+            .child(signed_checkbox.label("signed"))
+            .child(be_checkbox.label("big-end"))
+            .child(field_label("scale"))
+            .child(Input::new(&s.scale).w(px(60.)))
+            .child(field_label("offset"))
+            .child(Input::new(&s.offset).w(px(60.)))
             .child(remove_btn)
             .into_any_element()
     }
@@ -368,4 +658,20 @@ impl ConfigurationTab {
             .child(remove_btn)
             .into_any_element()
     }
+}
+
+fn set_signal_mut(
+    devices: &mut [CanDeviceForm],
+    dev_i: usize,
+    group_i: Option<usize>,
+    sig_i: usize,
+    f: impl FnOnce(&mut SignalForm),
+) {
+    let signals = &mut devices[dev_i].signals;
+    let sig = match (signals, group_i) {
+        (SignalsForm::Fixed(sigs), None) => &mut sigs[sig_i],
+        (SignalsForm::Muxed { groups, .. }, Some(gi)) => &mut groups[gi].signals[sig_i],
+        _ => return,
+    };
+    f(sig);
 }
