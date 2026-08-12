@@ -1,5 +1,5 @@
 use gpui::{AnyElement, IntoElement, prelude::*, px};
-use gpui_component::h_flex;
+use gpui_component::{h_flex, v_flex};
 use gpui_component::label::Label;
 
 use crate::theme;
@@ -14,7 +14,6 @@ pub(super) fn section_header(title: &str, add_btn: impl IntoElement) -> AnyEleme
 
 pub(super) fn row_container() -> gpui::Div {
     h_flex()
-        .flex_wrap()
         .gap(px(8.))
         .px(px(8.))
         .py(px(4.))
@@ -22,8 +21,16 @@ pub(super) fn row_container() -> gpui::Div {
         .bg(theme::panel_bg())
 }
 
-pub(super) fn indented_row() -> gpui::Div {
-    row_container().ml(px(20.))
+/// Stacks children vertically (each usually an `h_flex` line), indented under a device/group row.
+pub(super) fn indented_col() -> gpui::Div {
+    v_flex()
+        .items_start()
+        .gap(px(4.))
+        .ml(px(20.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded_sm()
+        .bg(theme::panel_bg())
 }
 
 pub(super) fn field_label(text: &str) -> AnyElement {

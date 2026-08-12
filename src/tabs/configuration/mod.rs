@@ -19,7 +19,7 @@ use model::{
     AdcChannelForm, CanDeviceForm, SignalForm, SignalGroupForm, SignalsForm, build_config_json,
     signal_count,
 };
-use widgets::{field_label, indented_row, row_container, section_header};
+use widgets::{field_label, indented_col, row_container, section_header};
 
 #[derive(Default)]
 enum Status {
@@ -369,9 +369,7 @@ impl ConfigurationTab {
             }
         };
 
-        indented_row()
-            .flex_col()
-            .items_start()
+        indented_col()
             .gap(px(6.))
             .child(h_flex().gap(px(6.)).child(fixed_mode_btn).child(muxed_mode_btn))
             .child(body)
@@ -501,10 +499,7 @@ impl ConfigurationTab {
                 .ok();
             });
 
-        indented_row()
-            .flex_col()
-            .items_start()
-            .gap(px(4.))
+        indented_col()
             .child(
                 h_flex()
                     .gap(px(8.))
@@ -580,20 +575,28 @@ impl ConfigurationTab {
                 .ok();
             });
 
-        indented_row()
-            .child(field_label("name"))
-            .child(Input::new(&s.name).w(px(90.)))
-            .child(field_label("start"))
-            .child(Input::new(&s.start).w(px(40.)))
-            .child(field_label("len"))
-            .child(Input::new(&s.len).w(px(40.)))
-            .child(signed_checkbox.label("signed"))
-            .child(be_checkbox.label("big-end"))
-            .child(field_label("scale"))
-            .child(Input::new(&s.scale).w(px(60.)))
-            .child(field_label("offset"))
-            .child(Input::new(&s.offset).w(px(60.)))
-            .child(remove_btn)
+        indented_col()
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(field_label("name"))
+                    .child(Input::new(&s.name).w(px(90.)))
+                    .child(field_label("start"))
+                    .child(Input::new(&s.start).w(px(40.)))
+                    .child(field_label("len"))
+                    .child(Input::new(&s.len).w(px(40.)))
+                    .child(remove_btn),
+            )
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(signed_checkbox.label("signed"))
+                    .child(be_checkbox.label("big-end"))
+                    .child(field_label("scale"))
+                    .child(Input::new(&s.scale).w(px(60.)))
+                    .child(field_label("offset"))
+                    .child(Input::new(&s.offset).w(px(60.))),
+            )
             .into_any_element()
     }
 
