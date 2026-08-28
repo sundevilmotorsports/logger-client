@@ -13,6 +13,7 @@ pub enum Command {
     GetConfig,
     SetConfig { args: serde_json::Value },
     Frames,
+    CanNodes,
     Uptime,
     Gps,
     Imu,
@@ -23,6 +24,9 @@ pub enum Command {
     SetLogging { active: bool },
     NextLog,
     Reboot,
+    OtaUpload { offset: u64, data: String },
+    OtaFlash { node: u8, size: u32, crc: u32 },
+    OtaStatus,
 }
 
 #[derive(Debug)]
@@ -36,6 +40,7 @@ pub enum Response {
     Config(serde_json::Value),
     SetConfigOk,
     Frames(Vec<serde_json::Value>),
+    CanNodes(Vec<CanNode>),
     Uptime { uptime_seconds: u64 },
     Gps(GpsFix),
     Imu(ImuReading),
@@ -46,6 +51,19 @@ pub enum Response {
     SetLoggingOk,
     NextLogOk,
     RebootOk,
+    OtaUpload { committed: u32 },
+    OtaFlashOk,
+    OtaStatus(OtaStatus),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OtaStatus {
+    pub active: bool,
+    pub sent: u32,
+    pub total: u32,
+    /// `None` while running; `Some(0)` = success, else a failure code
+    /// (`can_ota_result`, or `0xFE`/`0xFD` for logger-side timeout / SD error).
+    pub result: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +96,15 @@ pub struct LogEntry {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct CanNode {
+    pub node: u8,
+    #[serde(rename = "type")]
+    pub device_type: u8,
+    /// Millis since this node's last heartbeat
+    pub age_ms: i64,
+}
+
 /// Per-subsystem init/health flags reported by the firmware's `Status` command.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 pub struct DeviceStatusFlags {
@@ -88,6 +115,15 @@ pub struct DeviceStatusFlags {
     pub logging: bool,
     pub sd: bool,
     pub usb_hs: bool,
+}
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
@@ -156,6 +192,10 @@ impl Connection {
             Command::GetConfig => Response::Config(data),
             Command::SetConfig { .. } => Response::SetConfigOk,
             Command::Frames => Response::Frames(data.as_array().cloned().unwrap_or_default()),
+            Command::CanNodes => Response::CanNodes(
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad can_nodes data ({e}): {data}"))?,
+            ),
             Command::Uptime => Response::Uptime {
                 uptime_seconds: data["uptime_seconds"]
                     .as_u64()
@@ -188,6 +228,14 @@ impl Connection {
             Command::SetLogging { .. } => Response::SetLoggingOk,
             Command::NextLog => Response::NextLogOk,
             Command::Reboot => Response::RebootOk,
+            Command::OtaUpload { .. } => Response::OtaUpload {
+                committed: data["committed"].as_u64().unwrap_or(0) as u32,
+            },
+            Command::OtaFlash { .. } => Response::OtaFlashOk,
+            Command::OtaStatus => Response::OtaStatus(
+                serde_json::from_value(data.clone())
+                    .map_err(|e| anyhow!("bad ota_status ({e}): {data}"))?,
+            ),
         })
     }
 }
@@ -218,6 +266,13 @@ pub async fn list_logs(log_tx: &LogRequestTx) -> anyhow::Result<Vec<LogEntry>> {
     match request(log_tx, Command::ListLogs).await? {
         Response::Logs(entries) => Ok(entries),
         other => Err(anyhow!("unexpected response to list_logs: {other:?}")),
+    }
+}
+
+pub async fn can_nodes(log_tx: &LogRequestTx) -> anyhow::Result<Vec<CanNode>> {
+    match request(log_tx, Command::CanNodes).await? {
+        Response::CanNodes(nodes) => Ok(nodes),
+        other => Err(anyhow!("unexpected response to can_nodes: {other:?}")),
     }
 }
 

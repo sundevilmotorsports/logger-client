@@ -1,12 +1,14 @@
 mod configuration;
 mod console;
 mod device_info;
+mod devices;
 mod home;
 mod logs;
 
 pub use configuration::ConfigurationTab;
 pub use console::ConsoleTab;
 pub use device_info::DeviceInfoTab;
+pub use devices::DevicesTab;
 pub use home::HomeTab;
 pub use logs::LogsTab;
 
@@ -27,6 +29,7 @@ pub(crate) fn empty_state(text: &'static str) -> AnyElement {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     Home,
+    Devices,
     Logs,
     Console,
     Configuration,
@@ -34,8 +37,9 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Home,
+        Tab::Devices,
         Tab::Logs,
         Tab::Console,
         Tab::Configuration,
@@ -45,6 +49,7 @@ impl Tab {
     pub fn title(self) -> &'static str {
         match self {
             Tab::Home => "Home",
+            Tab::Devices => "Devices",
             Tab::Logs => "Logs",
             Tab::Console => "Console",
             Tab::Configuration => "Configuration",

@@ -9,7 +9,9 @@ use gpui_component::{Sizable, h_flex, v_flex};
 use std::time::Duration;
 
 use crate::device::{self, DeviceState};
-use crate::tabs::{ConfigurationTab, ConsoleTab, DeviceInfoTab, HomeTab, LogsTab, Tab};
+use crate::tabs::{
+    ConfigurationTab, ConsoleTab, DeviceInfoTab, DevicesTab, HomeTab, LogsTab, Tab,
+};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
 use crate::toast::{self, Toast, ToastKind};
 
@@ -22,11 +24,13 @@ pub struct RootView {
     selected_tab: Tab,
     focus_handle: FocusHandle,
     home_tab: HomeTab,
+    pub(crate) devices_tab: DevicesTab,
     pub(crate) logs_tab: LogsTab,
     pub(crate) console_tab: ConsoleTab,
     pub(crate) configuration_tab: ConfigurationTab,
     info_tab: DeviceInfoTab,
     logs_poll: Option<gpui::Task<()>>,
+    devices_poll: Option<gpui::Task<()>>,
     toasts: Vec<(u64, Toast)>,
     next_toast_id: u64,
 }
@@ -76,11 +80,13 @@ impl RootView {
             selected_tab: Tab::Home,
             focus_handle,
             home_tab: HomeTab::default(),
+            devices_tab: DevicesTab::default(),
             logs_tab: LogsTab::default(),
             console_tab: ConsoleTab::default(),
             configuration_tab: ConfigurationTab::default(),
             info_tab: DeviceInfoTab::default(),
             logs_poll: None,
+            devices_poll: None,
             toasts: Vec::new(),
             next_toast_id: 0,
         };
@@ -138,6 +144,37 @@ impl RootView {
         }));
     }
 
+    /// Same idea as `sync_logs_poll`, for the Devices tab's CAN node list.
+    fn sync_devices_poll(&mut self, cx: &mut Context<Self>) {
+        if self.selected_tab != Tab::Devices {
+            self.devices_poll = None;
+            return;
+        }
+        if self.devices_poll.is_some() {
+            return;
+        }
+        let log_tx = self.log_tx.clone();
+        self.devices_poll = Some(cx.spawn(async move |weak, cx| {
+            loop {
+                let result = device::can_nodes(&log_tx).await;
+                let alive = weak
+                    .update(cx, |view, cx| {
+                        if let Ok(nodes) = result {
+                            view.devices_tab.set_nodes(nodes);
+                            cx.notify();
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+            }
+        }));
+    }
+
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
         TabBar::new("tabs")
@@ -153,6 +190,7 @@ impl RootView {
                 weak.update(app, |this, cx| {
                     this.selected_tab = tab;
                     this.sync_logs_poll(cx);
+                    this.sync_devices_poll(cx);
                     let log_tx = this.log_tx.clone();
                     this.configuration_tab
                         .auto_fetch(&log_tx, window_handle, cx);
@@ -253,6 +291,7 @@ impl Render for RootView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.selected_tab {
             Tab::Home => self.home_tab.render(&self.state, &self.req_tx),
+            Tab::Devices => self.devices_tab.render(&self.log_tx, cx),
             Tab::Logs => self
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
