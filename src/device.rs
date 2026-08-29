@@ -61,8 +61,9 @@ pub struct OtaStatus {
     pub active: bool,
     pub sent: u32,
     pub total: u32,
-    /// `None` while running; `Some(0)` = success, else a failure code
-    /// (`can_ota_result`, or `0xFE`/`0xFD` for logger-side timeout / SD error).
+    /// `None` while running; `Some(0)` = success, else a failure code:
+    /// `1..=6` `can_ota_result`, `0xFE` node silent, `0xFD` upload starved,
+    /// `0xF2` logger flash write, `0xF3` logger verify.
     pub result: Option<u8>,
 }
 
@@ -144,7 +145,7 @@ struct Connection {
 impl Connection {
     fn open(port_name: &str) -> anyhow::Result<Self> {
         let mut port = serialport::new(port_name, 115200)
-            .timeout(Duration::from_millis(2000))
+            .timeout(Duration::from_millis(12_000))
             .open()?;
         port.clear(serialport::ClearBuffer::Input).ok();
         let writer = port.try_clone()?;

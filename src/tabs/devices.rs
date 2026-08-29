@@ -117,10 +117,16 @@ impl DevicesTab {
         let log_tx = log_tx.clone();
         let weak = cx.weak_entity();
         let update_btn = Button::new(("devices-ota", idx))
-            .label(if job.is_some() { "updating..." } else { "update fw" })
+            .label(if job.is_some() {
+                "updating..."
+            } else if is_self {
+                "update this logger"
+            } else {
+                "update fw"
+            })
             .ghost()
             .small()
-            .disabled(busy_anywhere || is_self)
+            .disabled(busy_anywhere)
             .on_click(move |_, _, app| {
                 let log_tx = log_tx.clone();
                 let weak = weak.clone();
@@ -205,10 +211,13 @@ async fn run_ota_job_inner(
     }
     let crc = sdm_utils::ota::crc32(&bytes);
     let total = bytes.len() as u64;
-
-    // Start the transfer, then stream chunks — the logger relays each to the
-    // node over CAN as it arrives, so the progress bar tracks the node's
-    // confirmed offset, not how much we've uploaded.
+    let is_logger = node == sdm_utils::Node::Logger as u8;
+    let phase = if is_logger {
+        "writing to logger flash"
+    } else {
+        "streaming to node"
+    };
+    
     match device::request(
         log_tx,
         device::Command::OtaFlash {
@@ -223,7 +232,7 @@ async fn run_ota_job_inner(
         other => anyhow::bail!("unexpected response to ota_flash: {other:?}"),
     }
 
-    set_job(weak, cx, "streaming to node", 0, total);
+    set_job(weak, cx, phase, 0, total);
     for (i, chunk) in bytes.chunks(UPLOAD_CHUNK).enumerate() {
         let offset = (i * UPLOAD_CHUNK) as u64;
         let committed = match device::request(
@@ -238,29 +247,31 @@ async fn run_ota_job_inner(
             device::Response::OtaUpload { committed } => committed,
             other => anyhow::bail!("unexpected response to ota_upload: {other:?}"),
         };
-        set_job(weak, cx, "streaming to node", committed as u64, total);
+        set_job(weak, cx, phase, committed as u64, total);
     }
 
-    set_job(weak, cx, "finishing", 0, total);
+    set_job(weak, cx, "verifying", 0, total);
     let mut last_sent = 0u32;
     let mut stalled_polls = 0u32;
     loop {
         cx.background_executor()
             .timer(Duration::from_millis(500))
             .await;
-        let status = match device::request(log_tx, device::Command::OtaStatus).await? {
-            device::Response::OtaStatus(s) => s,
-            other => anyhow::bail!("unexpected response to ota_status: {other:?}"),
+        let status = match device::request(log_tx, device::Command::OtaStatus).await {
+            Ok(device::Response::OtaStatus(s)) => s,
+            Ok(other) => anyhow::bail!("unexpected response to ota_status: {other:?}"),
+            // A successful logger self-update reboots the logger mid-poll.
+            Err(_) if is_logger => return Ok("logger updated, rebooting".to_string()),
+            Err(e) => return Err(e),
         };
         set_job(
             weak,
             cx,
-            "finishing",
+            "verifying",
             status.sent as u64,
             status.total.max(1) as u64,
         );
-        // ~60s with no progress and no result: the CAN side never got going
-        // (bus idle so the logger's CAN thread never woke, or the node is gone).
+
         stalled_polls = if status.sent == last_sent {
             stalled_polls + 1
         } else {
@@ -272,10 +283,15 @@ async fn run_ota_job_inner(
         }
         if let Some(code) = status.result {
             return match code {
+                0 if is_logger => Ok("logger updated, rebooting".to_string()),
                 0 => Ok(format!("node 0x{node:02X} updated")),
+                4 => anyhow::bail!("transfer corrupted (CRC mismatch)"),
+                5 => anyhow::bail!("logger flash write failed"),
                 0xFE => anyhow::bail!("node 0x{node:02X} never acknowledged"),
-                0xFD => anyhow::bail!("logger could not read the staged image"),
-                n => anyhow::bail!("node rejected update (can_ota code {n})"),
+                0xFD | 0xF4 => {
+                    anyhow::bail!("upload stalled before the image was complete")
+                }
+                n => anyhow::bail!("update rejected (can_ota code {n})"),
             };
         }
     }
