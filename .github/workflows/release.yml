@@ -13,8 +13,9 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Decide whether this push bumped the version in Cargo.toml. Everything
-  # downstream only runs when it did.
+  # Release when the Cargo.toml version has no matching v<version> tag yet.
+  # This fires on the version-bump commit and self-heals if an earlier run
+  # for that version failed.
   # ---------------------------------------------------------------------------
   version:
     runs-on: ubuntu-latest
@@ -24,30 +25,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - id: check
         shell: bash
         run: |
           set -euo pipefail
-          get_version() { grep -m1 '^version' "$1" | sed -E 's/.*"(.*)".*/\1/'; }
+          version="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-          new_version="$(get_version Cargo.toml)"
-          echo "version=$new_version" >> "$GITHUB_OUTPUT"
-
-          before="${{ github.event.before }}"
-          if [[ -z "$before" || "$before" == "0000000000000000000000000000000000000000" ]] || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
-            echo "No usable previous commit; treating as version change."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          old_version="$(git show "$before:Cargo.toml" 2>/dev/null | grep -m1 '^version' | sed -E 's/.*"(.*)".*/\1/' || true)"
-          echo "old=$old_version new=$new_version"
-          if [[ "$old_version" != "$new_version" ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "Tag v${version} already exists; nothing to release."
             echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "No tag v${version} yet; will build and release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
   # ---------------------------------------------------------------------------
