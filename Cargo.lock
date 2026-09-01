@@ -3409,6 +3409,7 @@ name = "logger-client"
 version = "0.1.2"
 dependencies = [
  "anyhow",
+ "base64",
  "env_logger",
  "gpui",
  "gpui-component",

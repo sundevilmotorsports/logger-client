@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,7 +33,9 @@ pub enum Command {
 #[derive(Debug)]
 pub enum Response {
     Pong,
-    Version { version: String },
+    Version {
+        version: String,
+    },
     Status {
         config_loaded: bool,
         subsystems: DeviceStatusFlags,
@@ -41,17 +44,27 @@ pub enum Response {
     SetConfigOk,
     Frames(Vec<serde_json::Value>),
     CanNodes(Vec<CanNode>),
-    Uptime { uptime_seconds: u64 },
+    Uptime {
+        uptime_seconds: u64,
+    },
     Gps(GpsFix),
     Imu(ImuReading),
     Resources(Resources),
     Logs(Vec<LogEntry>),
-    LogChunk { data: Vec<u8>, eof: bool },
-    LogStatus { active: bool, current: String },
+    LogChunk {
+        data: Vec<u8>,
+        eof: bool,
+    },
+    LogStatus {
+        active: bool,
+        current: String,
+    },
     SetLoggingOk,
     NextLogOk,
     RebootOk,
-    OtaUpload { committed: u32 },
+    OtaUpload {
+        committed: u32,
+    },
     OtaFlashOk,
     OtaStatus(OtaStatus),
 }
@@ -125,16 +138,6 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
         let _ = write!(out, "{b:02x}");
     }
     out
-}
-
-fn hex_decode(s: &str) -> anyhow::Result<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return Err(anyhow!("odd-length hex string"));
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| anyhow!("bad hex: {e}")))
-        .collect()
 }
 
 struct Connection {
@@ -219,7 +222,9 @@ impl Connection {
                     .map_err(|e| anyhow!("bad log list ({e}): {data}"))?,
             ),
             Command::LogChunk { .. } => Response::LogChunk {
-                data: hex_decode(data["data"].as_str().unwrap_or_default())?, // binary, hex-encoded
+                data: STANDARD
+                    .decode(data["data"].as_str().unwrap_or_default())
+                    .map_err(|e| anyhow!("bad base64 in log chunk: {e}"))?,
                 eof: data["eof"].as_bool().unwrap_or(true),
             },
             Command::LogStatus => Response::LogStatus {
@@ -411,6 +416,7 @@ pub fn poll(
         // Due immediately so the first loop iteration fetches uptime/gps/log
         // status right away, same as before this was rate-limited.
         let mut last_heartbeat = Instant::now() - Duration::from_secs(1);
+        let mut last_log_activity = Instant::now() - Duration::from_secs(1);
 
         loop {
             while let Ok(cmd) = req_rx.try_recv() {
@@ -433,6 +439,7 @@ pub fn poll(
             // isn't throttled to ~1 chunk/sec.
             while let Ok(req) = log_rx.try_recv() {
                 req.reply.send(conn.request(req.cmd)).ok();
+                last_log_activity = Instant::now();
             }
 
             if last_heartbeat.elapsed() >= Duration::from_secs(1) {
@@ -476,7 +483,8 @@ pub fn poll(
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(50));
+            let idle = last_log_activity.elapsed() > Duration::from_millis(250);
+            std::thread::sleep(Duration::from_millis(if idle { 50 } else { 2 }));
         }
 
         state = DeviceState::default();
