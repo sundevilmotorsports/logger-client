@@ -315,6 +315,19 @@ impl ConfigurationTab {
                 });
 
         let weak = cx.weak_entity();
+        let engine_checkbox =
+            Checkbox::new(("can-engine", i))
+                .checked(d.engine)
+                .on_click(move |checked, _, app| {
+                    let checked = *checked;
+                    weak.update(app, |this, cx| {
+                        this.configuration_tab.can_devices[i].engine = checked;
+                        cx.notify();
+                    })
+                    .ok();
+                });
+
+        let weak = cx.weak_entity();
         let expand_btn = Button::new(("can-expand", i))
             .label(if d.expanded {
                 format!("▾ {signals} signal(s)")
@@ -337,6 +350,7 @@ impl ConfigurationTab {
             .child(Input::new(&d.id).w(px(90.)))
             .child(ext_checkbox.label("ext"))
             .child(fd_checkbox.label("fd"))
+            .child(engine_checkbox.label("engine"))
             .child(expand_btn)
             .child(remove_btn)
             .into_any_element()

@@ -7,6 +7,7 @@ pub(super) struct CanDeviceForm {
     pub(super) id: Entity<InputState>,
     pub(super) extended: bool,
     pub(super) fd: bool,
+    pub(super) engine: bool,
     pub(super) signals: SignalsForm,
     pub(super) expanded: bool,
 }
@@ -17,6 +18,7 @@ impl CanDeviceForm {
             id: cx.new(|cx| InputState::new(window, cx).default_value("0")),
             extended: false,
             fd: false,
+            engine: false,
             signals: SignalsForm::Fixed(Vec::new()),
             expanded: false,
         }
@@ -103,9 +105,12 @@ impl SignalForm {
         let scale = if scale_text.trim().is_empty() {
             None
         } else {
-            Some(scale_text.trim().parse::<f32>().map_err(|_| {
-                anyhow::anyhow!("{label}: invalid scale \"{scale_text}\"")
-            })?)
+            Some(
+                scale_text
+                    .trim()
+                    .parse::<f32>()
+                    .map_err(|_| anyhow::anyhow!("{label}: invalid scale \"{scale_text}\""))?,
+            )
         };
         let offset_text = self.offset.read(cx).value().to_string();
         let offset: f32 = if offset_text.trim().is_empty() {
@@ -301,6 +306,7 @@ pub(super) fn can_devices_from_json(
                         id: cx.new(|cx| InputState::new(window, cx).default_value(id_text)),
                         extended: d.get("extended").and_then(|v| v.as_bool()).unwrap_or(false),
                         fd: d.get("fd").and_then(|v| v.as_bool()).unwrap_or(false),
+                        engine: d.get("bus").and_then(|v| v.as_str()) == Some("Engine"),
                         signals: d
                             .get("signals")
                             .map(|s| signals_from_json(s, window, cx))
@@ -370,6 +376,7 @@ pub(super) fn build_config_json(
             "id": id,
             "extended": d.extended,
             "fd": d.fd,
+            "bus": if d.engine { "Engine" } else { "Module" },
             "signals": signals,
         }));
     }
