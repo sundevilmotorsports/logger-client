@@ -7,7 +7,7 @@ use gpui_component::{Disableable, Sizable, h_flex, v_flex};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::device::{self, CanNode};
+use crate::device::{self, CanNode, DeviceState};
 use crate::root_view::RootView;
 use crate::theme;
 
@@ -41,15 +41,33 @@ impl DevicesTab {
 
     pub fn render(
         &self,
+        state: &DeviceState,
         log_tx: &device::LogRequestTx,
         cx: &mut Context<RootView>,
     ) -> AnyElement {
-        let body: AnyElement = if self.nodes.is_empty() {
-            super::empty_state("no CAN nodes seen yet")
+        const LOGGER: u8 = sdm_utils::Node::Logger as u8;
+        let mut nodes = self.nodes.clone();
+        if state.port.is_some() && !nodes.iter().any(|n| n.node == LOGGER) {
+            nodes.insert(
+                0,
+                CanNode {
+                    node: LOGGER,
+                    device_type: sdm_utils::DeviceType::Logger as u8,
+                    age_ms: 0,
+                },
+            );
+        }
+
+        let body: AnyElement = if nodes.is_empty() {
+            super::empty_state(if state.port.is_some() {
+                "no CAN nodes seen yet"
+            } else {
+                "no device connected"
+            })
         } else {
             let mut rows = v_flex().items_start().gap(px(2.));
-            for (idx, node) in self.nodes.iter().enumerate() {
-                rows = rows.child(self.node_row(idx, node, log_tx, cx));
+            for (idx, node) in nodes.iter().enumerate() {
+                rows = rows.child(self.node_row(idx, node, state, log_tx, cx));
             }
             rows.into_any_element()
         };
@@ -90,6 +108,7 @@ impl DevicesTab {
         &self,
         idx: usize,
         node: &CanNode,
+        state: &DeviceState,
         log_tx: &device::LogRequestTx,
         cx: &mut Context<RootView>,
     ) -> AnyElement {
@@ -103,7 +122,11 @@ impl DevicesTab {
         };
 
         let (status, status_color) = if is_self {
-            ("this device".to_string(), theme::green())
+            let label = match &state.firmware_version {
+                Some(v) => format!("{v}"),
+                None => "this device".to_string(),
+            };
+            (label, theme::green())
         } else if node.age_ms < ONLINE_MS {
             ("online".to_string(), theme::green())
         } else {
@@ -120,7 +143,7 @@ impl DevicesTab {
             .label(if job.is_some() {
                 "updating..."
             } else if is_self {
-                "update this logger"
+                "update"
             } else {
                 "update fw"
             })
@@ -217,7 +240,7 @@ async fn run_ota_job_inner(
     } else {
         "streaming to node"
     };
-    
+
     match device::request(
         log_tx,
         device::Command::OtaFlash {
@@ -297,7 +320,13 @@ async fn run_ota_job_inner(
     }
 }
 
-fn set_job(weak: &WeakEntity<RootView>, cx: &mut AsyncApp, phase: &'static str, done: u64, total: u64) {
+fn set_job(
+    weak: &WeakEntity<RootView>,
+    cx: &mut AsyncApp,
+    phase: &'static str,
+    done: u64,
+    total: u64,
+) {
     weak.update(cx, |this, cx| {
         if let Some(job) = &mut this.devices_tab.job {
             job.phase = phase;

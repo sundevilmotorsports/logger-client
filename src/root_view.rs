@@ -291,7 +291,7 @@ impl Render for RootView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.selected_tab {
             Tab::Home => self.home_tab.render(&self.state, &self.req_tx),
-            Tab::Devices => self.devices_tab.render(&self.log_tx, cx),
+            Tab::Devices => self.devices_tab.render(&self.state, &self.log_tx, cx),
             Tab::Logs => self
                 .logs_tab
                 .render(&self.state, &self.req_tx, &self.log_tx, cx),
