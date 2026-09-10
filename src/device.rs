@@ -75,8 +75,8 @@ pub struct OtaStatus {
     pub sent: u32,
     pub total: u32,
     /// `None` while running; `Some(0)` = success, else a failure code:
-    /// `1..=6` `can_ota_result`, `0xFE` node silent, `0xFD` upload starved,
-    /// `0xF2` logger flash write, `0xF3` logger verify.
+    /// `1..=6` `can_ota_result` (5 = flash/validation), `0xFE` node silent,
+    /// `0xFD`/`0xF4` upload starved, `0xF5` payload was not a bare app image.
     pub result: Option<u8>,
 }
 

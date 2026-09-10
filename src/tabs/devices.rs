@@ -309,8 +309,10 @@ async fn run_ota_job_inner(
                 0 if is_logger => Ok("logger updated, rebooting".to_string()),
                 0 => Ok(format!("node 0x{node:02X} updated")),
                 4 => anyhow::bail!("transfer corrupted (CRC mismatch)"),
-                5 => anyhow::bail!("logger flash write failed"),
+                5 if is_logger => anyhow::bail!("image rejected by esp_ota"),
+                5 => anyhow::bail!("node 0x{node:02X} flash write failed"),
                 0xFE => anyhow::bail!("node 0x{node:02X} never acknowledged"),
+                0xF5 => anyhow::bail!("wrong file"),
                 0xFD | 0xF4 => {
                     anyhow::bail!("upload stalled before the image was complete")
                 }
