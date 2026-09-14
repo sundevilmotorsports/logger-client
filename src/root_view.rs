@@ -1,21 +1,23 @@
 use gpui::{
     AnyWindowHandle, App, AsyncApp, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    Render, WeakEntity, Window, div, prelude::*, px,
+    PathPromptOptions, Render, WeakEntity, Window, actions, div, prelude::*, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::label::Label;
 use gpui_component::tab::TabBar;
 use gpui_component::{Sizable, h_flex, v_flex};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::device::{self, DeviceState};
-use crate::tabs::{
-    ConfigurationTab, ConsoleTab, DeviceInfoTab, DevicesTab, HomeTab, LogsTab, Tab,
-};
+use crate::log_parse;
+use crate::tabs::{ConfigurationTab, ConsoleTab, DeviceInfoTab, DevicesTab, HomeTab, LogsTab, Tab};
 use crate::theme::{self, TITLEBAR_HEIGHT, TITLEBAR_LEFT_INSET, TITLEBAR_RIGHT_INSET};
 use crate::toast::{self, Toast, ToastKind};
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(4);
+
+actions!(logger_client, [ParseLogFile]);
 
 pub struct RootView {
     state: DeviceState,
@@ -90,9 +92,22 @@ impl RootView {
             toasts: Vec::new(),
             next_toast_id: 0,
         };
-        
+
         this.console_tab.start(cx);
         this
+    }
+
+    /// `File > Parse Log File...`: pick a `.bin` log already sitting on disk
+    /// (e.g. pulled straight off the SD card) and decode it to CSV, with no
+    /// device connection required.
+    fn on_parse_log_file(
+        &mut self,
+        _: &ParseLogFile,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |weak, cx| parse_log_file_flow(weak, cx).await)
+            .detach();
     }
 
     pub(crate) fn push_toast(&mut self, cx: &mut Context<Self>, message: String, kind: ToastKind) {
@@ -281,6 +296,81 @@ pub async fn run_command_toast(
         .ok();
 }
 
+/// Prompts for a local `.bin` log file, decodes it, prompts for where to
+/// save the CSV, and reports the result as a toast. Independent of any live
+/// device connection -- for logs already off the SD card.
+async fn parse_log_file_flow(weak: WeakEntity<RootView>, cx: &mut AsyncApp) {
+    let result = parse_log_file_flow_inner(cx).await;
+    let (message, kind) = match result {
+        Ok(Some(message)) => (message, ToastKind::Success),
+        Ok(None) => return, // user cancelled a dialog; nothing to report
+        Err(e) => (format!("parse log failed: {e}"), ToastKind::Error),
+    };
+    weak.update(cx, |view, cx| view.push_toast(cx, message, kind))
+        .ok();
+}
+
+async fn parse_log_file_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option<String>> {
+    let open_rx = cx.update(|app| {
+        app.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Parse".into()),
+        })
+    })?;
+    let Some(mut paths) = open_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("open dialog closed unexpectedly"))??
+    else {
+        return Ok(None);
+    };
+    let src = paths.remove(0);
+
+    let raw =
+        std::fs::read(&src).map_err(|e| anyhow::anyhow!("couldn't read {}: {e}", src.display()))?;
+
+    let csv_name = format!(
+        "{}.csv",
+        src.file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default()
+    );
+    let save_dir = src
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let save_rx = cx.update(|app| app.prompt_for_new_path(&save_dir, Some(&csv_name)))?;
+    let Some(dest) = save_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("save dialog closed unexpectedly"))??
+    else {
+        return Ok(None);
+    };
+
+    // Parsing is synchronous CPU work; run it off the UI thread like the
+    // device-download path does.
+    let parse_handle = std::thread::spawn(move || log_parse::parse_log(&raw, |_, _| {}));
+    let parsed = parse_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("log parser thread panicked"))??;
+
+    std::fs::write(&dest, log_parse::to_csv(&parsed))
+        .map_err(|e| anyhow::anyhow!("couldn't write {}: {e}", dest.display()))?;
+
+    let ld_dest = dest.with_extension("ld");
+    std::fs::write(&ld_dest, crate::motec::build_ld(&parsed))
+        .map_err(|e| anyhow::anyhow!("couldn't write {}: {e}", ld_dest.display()))?;
+
+    Ok(Some(format!(
+        "parsed {} rows from {}, saved {} and {}",
+        parsed.rows.len(),
+        src.display(),
+        dest.display(),
+        ld_dest.display()
+    )))
+}
+
 impl Focusable for RootView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -317,6 +407,7 @@ impl Render for RootView {
 
         div()
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_parse_log_file))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Key events bubble from whatever's focused up through this
                 // root handler, so without this check typing "q" into a

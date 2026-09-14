@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::device::{self, DeviceState};
 use crate::log_parse;
+use crate::motec;
 use crate::root_view::{self, RootView};
 use crate::theme;
 
@@ -133,24 +134,25 @@ impl LogsTab {
 
         let next_log_tx = log_tx.clone();
         let weak = cx.weak_entity();
-        let next_btn = Button::new("logs-next")
-            .label("new log")
-            .small()
-            .on_click(move |_, _, app| {
-                let log_tx = next_log_tx.clone();
-                let weak = weak.clone();
-                app.spawn(async move |cx| {
-                    root_view::run_command_toast(
-                        weak,
-                        cx,
-                        log_tx,
-                        device::Command::NextLog,
-                        "new log",
-                    )
-                    .await
-                })
-                .detach();
-            });
+        let next_btn =
+            Button::new("logs-next")
+                .label("new log")
+                .small()
+                .on_click(move |_, _, app| {
+                    let log_tx = next_log_tx.clone();
+                    let weak = weak.clone();
+                    app.spawn(async move |cx| {
+                        root_view::run_command_toast(
+                            weak,
+                            cx,
+                            log_tx,
+                            device::Command::NextLog,
+                            "new log",
+                        )
+                        .await
+                    })
+                    .detach();
+                });
 
         h_flex()
             .justify_between()
@@ -216,7 +218,11 @@ impl LogsTab {
             .child(
                 h_flex()
                     .gap(px(12.))
-                    .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
+                    .child(
+                        Label::new(entry.name.clone())
+                            .text_color(name_color)
+                            .w(px(180.)),
+                    )
                     .child(
                         Label::new(format_size(entry.size))
                             .text_color(theme::muted())
@@ -229,11 +235,7 @@ impl LogsTab {
             Some(b) => v_flex()
                 .gap(px(2.))
                 .child(row)
-                .child(
-                    div()
-                        .px(px(12.))
-                        .child(progress_bar(b.downloaded, b.total)),
-                )
+                .child(div().px(px(12.)).child(progress_bar(b.downloaded, b.total)))
                 .into_any_element(),
             None => row.into_any_element(),
         }
@@ -306,10 +308,14 @@ async fn run_job_inner(
 
     std::fs::write(&dest, log_parse::to_csv(&parsed))?;
 
+    let ld_dest = dest.with_extension("ld");
+    std::fs::write(&ld_dest, motec::build_ld(&parsed))?;
+
     Ok(format!(
-        "parsed {} rows, saved to {}",
+        "parsed {} rows, saved {} and {}",
         parsed.rows.len(),
-        dest.display()
+        dest.display(),
+        ld_dest.display()
     ))
 }
 

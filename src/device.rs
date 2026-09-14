@@ -17,7 +17,7 @@ pub enum Command {
     CanNodes,
     Uptime,
     Gps,
-    Imu,
+    Power,
     Resources,
     ListLogs,
     LogChunk { name: String, offset: u64 },
@@ -48,7 +48,7 @@ pub enum Response {
         uptime_seconds: u64,
     },
     Gps(GpsFix),
-    Imu(ImuReading),
+    Power(PowerReading),
     Resources(Resources),
     Logs(Vec<LogEntry>),
     LogChunk {
@@ -80,12 +80,23 @@ pub struct OtaStatus {
     pub result: Option<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ImuReading {
-    pub accel_g: [f32; 3],
-    pub gyro_dps: [f32; 3],
-    pub temp_c: f32,
-    pub mag_ut: [f32; 3],
+/// Raw INA260 registers; not scaled on-device (see the firmware's `ina260.rs`).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct PowerReading {
+    /// 1.25 mA/LSB, signed.
+    pub current_raw: i16,
+    /// 1.25 mV/LSB, unsigned.
+    pub voltage_raw: u16,
+}
+
+impl PowerReading {
+    pub fn current_ma(&self) -> f32 {
+        self.current_raw as f32 * 1.25
+    }
+
+    pub fn voltage_mv(&self) -> f32 {
+        self.voltage_raw as f32 * 1.25
+    }
 }
 
 /// Extra fields the firmware sends (`quality`, `utc`) are simply ignored.
@@ -125,10 +136,10 @@ pub struct DeviceStatusFlags {
     pub adc: bool,
     pub can: bool,
     pub gnss: bool,
-    pub imu: bool,
+    pub power: bool,
     pub logging: bool,
     pub sd: bool,
-    pub usb_hs: bool,
+    pub serial: bool,
 }
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -209,9 +220,9 @@ impl Connection {
                 serde_json::from_value(data.clone())
                     .map_err(|e| anyhow!("bad gps data ({e}): {data}"))?,
             ),
-            Command::Imu => Response::Imu(
+            Command::Power => Response::Power(
                 serde_json::from_value(data.clone())
-                    .map_err(|e| anyhow!("bad imu data ({e}): {data}"))?,
+                    .map_err(|e| anyhow!("bad power data ({e}): {data}"))?,
             ),
             Command::Resources => Response::Resources(
                 serde_json::from_value(data.clone())
@@ -341,6 +352,12 @@ fn usb_speed_mbps(_port_name: &str) -> Option<String> {
 const ESPRESSIF_VID: u16 = 0x303a;
 const ROM_DOWNLOAD_PID: u16 = 0x1001;
 
+/// The SDM26 board has no native USB wired (see the firmware's `uart_serial`
+/// module) -- the desktop link runs over a CP2102N USB-UART bridge instead,
+/// which enumerates under Silicon Labs' VID/PID rather than Espressif's.
+const SILICON_LABS_VID: u16 = 0x10c4;
+const CP210X_PID: u16 = 0xea60;
+
 pub fn find_port() -> Option<String> {
     serialport::available_ports()
         .ok()?
@@ -348,6 +365,11 @@ pub fn find_port() -> Option<String> {
         .find_map(|p| match p.port_type {
             serialport::SerialPortType::UsbPort(info)
                 if info.vid == ESPRESSIF_VID && info.pid != ROM_DOWNLOAD_PID =>
+            {
+                Some(p.port_name)
+            }
+            serialport::SerialPortType::UsbPort(info)
+                if info.vid == SILICON_LABS_VID && info.pid == CP210X_PID =>
             {
                 Some(p.port_name)
             }
@@ -362,7 +384,7 @@ pub struct DeviceState {
     pub uptime: Option<u64>,
     pub last_ping: Option<bool>,
     pub gps: Option<GpsFix>,
-    pub imu: Option<ImuReading>,
+    pub power: Option<PowerReading>,
     pub logging_active: Option<bool>,
     pub current_log: Option<String>,
     pub status: Option<DeviceStatusFlags>,
@@ -451,8 +473,8 @@ pub fn poll(
                             Ok(Response::Gps(fix)) => Some(fix),
                             _ => None,
                         };
-                        state.imu = match conn.request(Command::Imu) {
-                            Ok(Response::Imu(reading)) => Some(reading),
+                        state.power = match conn.request(Command::Power) {
+                            Ok(Response::Power(reading)) => Some(reading),
                             _ => None,
                         };
                         state.status = match conn.request(Command::Status) {

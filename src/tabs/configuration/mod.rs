@@ -54,7 +54,7 @@ impl ConfigurationTab {
         cx.spawn(async move |weak, cx| refresh(weak, cx, log_tx, window_handle).await)
             .detach();
     }
-    
+
     pub(crate) fn auto_fetch(
         &mut self,
         log_tx: &device::LogRequestTx,
@@ -244,20 +244,19 @@ impl ConfigurationTab {
         }
 
         let weak = cx.weak_entity();
-        let add_btn =
-            Button::new("can-add")
-                .label("+ add device")
-                .ghost()
-                .small()
-                .on_click(move |_, window, app| {
-                    weak.update(app, |this, cx| {
-                        this.configuration_tab
-                            .can_devices
-                            .push(CanDeviceForm::new(window, cx));
-                        cx.notify();
-                    })
-                    .ok();
-                });
+        let add_btn = Button::new("can-add")
+            .label("+ add device")
+            .ghost()
+            .small()
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab
+                        .can_devices
+                        .push(CanDeviceForm::new(window, cx));
+                    cx.notify();
+                })
+                .ok();
+            });
 
         v_flex()
             .gap(px(6.))
@@ -275,18 +274,17 @@ impl ConfigurationTab {
         let signals = signal_count(&d.signals);
 
         let weak = cx.weak_entity();
-        let remove_btn =
-            Button::new(("can-remove", i))
-                .label("remove")
-                .ghost()
-                .small()
-                .on_click(move |_, _, app| {
-                    weak.update(app, |this, cx| {
-                        this.configuration_tab.can_devices.remove(i);
-                        cx.notify();
-                    })
-                    .ok();
-                });
+        let remove_btn = Button::new(("can-remove", i))
+            .label("remove")
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab.can_devices.remove(i);
+                    cx.notify();
+                })
+                .ok();
+            });
 
         let weak = cx.weak_entity();
         let ext_checkbox =
@@ -356,7 +354,12 @@ impl ConfigurationTab {
             .into_any_element()
     }
 
-    fn signals_editor(&self, dev_i: usize, d: &CanDeviceForm, cx: &mut Context<RootView>) -> AnyElement {
+    fn signals_editor(
+        &self,
+        dev_i: usize,
+        d: &CanDeviceForm,
+        cx: &mut Context<RootView>,
+    ) -> AnyElement {
         let is_muxed = matches!(d.signals, SignalsForm::Muxed { .. });
 
         let weak = cx.weak_entity();
@@ -388,14 +391,17 @@ impl ConfigurationTab {
 
         let body = match &d.signals {
             SignalsForm::Fixed(sigs) => self.fixed_signals_body(dev_i, sigs, cx),
-            SignalsForm::Muxed { byte, groups } => {
-                self.muxed_signals_body(dev_i, byte, groups, cx)
-            }
+            SignalsForm::Muxed { byte, groups } => self.muxed_signals_body(dev_i, byte, groups, cx),
         };
 
         indented_col()
             .gap(px(6.))
-            .child(h_flex().gap(px(6.)).child(fixed_mode_btn).child(muxed_mode_btn))
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .child(fixed_mode_btn)
+                    .child(muxed_mode_btn),
+            )
             .child(body)
             .into_any_element()
     }
@@ -428,7 +434,11 @@ impl ConfigurationTab {
                 .ok();
             });
 
-        v_flex().gap(px(4.)).child(rows).child(add_btn).into_any_element()
+        v_flex()
+            .gap(px(4.))
+            .child(rows)
+            .child(add_btn)
+            .into_any_element()
     }
 
     fn muxed_signals_body(
@@ -454,8 +464,7 @@ impl ConfigurationTab {
                         &mut this.configuration_tab.can_devices[dev_i].signals
                     {
                         groups.push(SignalGroupForm {
-                            type_val: cx
-                                .new(|cx| InputState::new(window, cx).default_value("0")),
+                            type_val: cx.new(|cx| InputState::new(window, cx).default_value("0")),
                             signals: Vec::new(),
                         });
                     }
@@ -555,9 +564,15 @@ impl ConfigurationTab {
             .on_click(move |checked, _, app| {
                 let checked = *checked;
                 weak.update(app, |this, cx| {
-                    set_signal_mut(&mut this.configuration_tab.can_devices, dev_i, group_i, sig_i, |s| {
-                        s.signed = checked;
-                    });
+                    set_signal_mut(
+                        &mut this.configuration_tab.can_devices,
+                        dev_i,
+                        group_i,
+                        sig_i,
+                        |s| {
+                            s.signed = checked;
+                        },
+                    );
                     cx.notify();
                 })
                 .ok();
@@ -569,9 +584,15 @@ impl ConfigurationTab {
             .on_click(move |checked, _, app| {
                 let checked = *checked;
                 weak.update(app, |this, cx| {
-                    set_signal_mut(&mut this.configuration_tab.can_devices, dev_i, group_i, sig_i, |s| {
-                        s.big_endian = checked;
-                    });
+                    set_signal_mut(
+                        &mut this.configuration_tab.can_devices,
+                        dev_i,
+                        group_i,
+                        sig_i,
+                        |s| {
+                            s.big_endian = checked;
+                        },
+                    );
                     cx.notify();
                 })
                 .ok();
@@ -631,20 +652,19 @@ impl ConfigurationTab {
         }
 
         let weak = cx.weak_entity();
-        let add_btn =
-            Button::new("adc-add")
-                .label("+ add channel")
-                .ghost()
-                .small()
-                .on_click(move |_, window, app| {
-                    weak.update(app, |this, cx| {
-                        this.configuration_tab
-                            .adc_channels
-                            .push(AdcChannelForm::new(window, cx));
-                        cx.notify();
-                    })
-                    .ok();
-                });
+        let add_btn = Button::new("adc-add")
+            .label("+ add channel")
+            .ghost()
+            .small()
+            .on_click(move |_, window, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab
+                        .adc_channels
+                        .push(AdcChannelForm::new(window, cx));
+                    cx.notify();
+                })
+                .ok();
+            });
 
         v_flex()
             .gap(px(6.))
@@ -660,18 +680,17 @@ impl ConfigurationTab {
         cx: &mut Context<RootView>,
     ) -> AnyElement {
         let weak = cx.weak_entity();
-        let remove_btn =
-            Button::new(("adc-remove", i))
-                .label("remove")
-                .ghost()
-                .small()
-                .on_click(move |_, _, app| {
-                    weak.update(app, |this, cx| {
-                        this.configuration_tab.adc_channels.remove(i);
-                        cx.notify();
-                    })
-                    .ok();
-                });
+        let remove_btn = Button::new(("adc-remove", i))
+            .label("remove")
+            .ghost()
+            .small()
+            .on_click(move |_, _, app| {
+                weak.update(app, |this, cx| {
+                    this.configuration_tab.adc_channels.remove(i);
+                    cx.notify();
+                })
+                .ok();
+            });
 
         row_container()
             .child(field_label("name"))

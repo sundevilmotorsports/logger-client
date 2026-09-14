@@ -21,7 +21,9 @@ fn format_kb(bytes: u32) -> String {
 
 fn resources_row(resources: Option<Resources>) -> AnyElement {
     let Some(r) = resources else {
-        return Label::new("—").text_color(theme::muted()).into_any_element();
+        return Label::new("—")
+            .text_color(theme::muted())
+            .into_any_element();
     };
 
     let mut row = h_flex().gap(px(12.));
@@ -53,10 +55,10 @@ fn health_row(status: Option<DeviceStatusFlags>) -> AnyElement {
         ("adc", status.map(|s| s.adc)),
         ("can", status.map(|s| s.can)),
         ("gnss", status.map(|s| s.gnss)),
-        ("imu", status.map(|s| s.imu)),
+        ("power", status.map(|s| s.power)),
         ("logging", status.map(|s| s.logging)),
         ("sd", status.map(|s| s.sd)),
-        ("usb", status.map(|s| s.usb_hs)),
+        ("serial", status.map(|s| s.serial)),
     ];
 
     let mut row = h_flex().gap(px(12.));
@@ -104,21 +106,12 @@ impl HomeTab {
             None => ("no fix".to_string(), theme::muted()),
         };
 
-        let (imu_str, imu_color) = match &state.imu {
-            Some(i) => (
-                format!(
-                    "{:.2}x {:.2}y {:.2}z, {:.1}c, mag {:.1}/{:.1}/{:.1}uT",
-                    i.accel_g[0],
-                    i.accel_g[1],
-                    i.accel_g[2],
-                    i.temp_c,
-                    i.mag_ut[0],
-                    i.mag_ut[1],
-                    i.mag_ut[2]
-                ),
+        let (power_str, power_color) = match &state.power {
+            Some(p) => (
+                format!("{:.0} mA, {:.0} mV", p.current_ma(), p.voltage_mv()),
                 theme::green(),
             ),
-            None => ("no imu".to_string(), theme::muted()),
+            None => ("no reading".to_string(), theme::muted()),
         };
 
         div()
@@ -138,7 +131,7 @@ impl HomeTab {
                     .item("logging", value(logging, logging_color), 1)
                     .item("file", value(current_log, theme::fg()), 1)
                     .item("gps", value(gps_str, gps_color), 1)
-                    .item("imu", value(imu_str, imu_color), 1),
+                    .item("power", value(power_str, power_color), 1),
             )
             .into_any_element()
     }

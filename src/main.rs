@@ -3,13 +3,17 @@ use std::borrow::Cow;
 pub mod console;
 pub mod device;
 pub mod log_parse;
+pub mod motec;
 pub mod root_view;
 pub mod tabs;
 pub mod theme;
 pub mod toast;
 
-use gpui::{App, AppContext, AssetSource, Bounds, SharedString, WindowOptions, px, size};
+use gpui::{
+    App, AppContext, AssetSource, Bounds, Menu, MenuItem, SharedString, WindowOptions, px, size,
+};
 use gpui_component::theme::{Theme, ThemeMode};
+use root_view::ParseLogFile;
 use rust_embed::RustEmbed;
 
 #[derive(Clone, Copy, RustEmbed)]
@@ -36,6 +40,11 @@ fn main() {
         .with_assets(Assets)
         .run(|cx: &mut App| {
             gpui_component::init(cx);
+
+            cx.set_menus(vec![Menu {
+                name: "File".into(),
+                items: vec![MenuItem::action("Parse Log File...", ParseLogFile)],
+            }]);
 
             let bounds = Bounds::centered(None, size(px(780.), px(540.)), cx);
             cx.open_window(

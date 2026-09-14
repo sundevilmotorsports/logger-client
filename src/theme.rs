@@ -47,7 +47,10 @@ pub fn apply(cx: &mut App) {
     c.title_bar = titlebar_bg();
     c.success = green();
     c.warning = amber();
-    c.selection = Hsla { a: 0.25, ..accent() };
+    c.selection = Hsla {
+        a: 0.25,
+        ..accent()
+    };
 
     c.tab_foreground = muted();
     c.tab_active_foreground = fg();

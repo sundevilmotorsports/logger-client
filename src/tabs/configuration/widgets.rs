@@ -1,6 +1,6 @@
 use gpui::{AnyElement, IntoElement, prelude::*, px};
-use gpui_component::{h_flex, v_flex};
 use gpui_component::label::Label;
+use gpui_component::{h_flex, v_flex};
 
 use crate::theme;
 
@@ -129,9 +129,7 @@ pub(super) fn can_help_panel() -> AnyElement {
         .child(help_group(
             "signals: muxed",
             vec![
-                mono_line(
-                    "one byte (the discriminator) picks which signal group to decode",
-                ),
+                mono_line("one byte (the discriminator) picks which signal group to decode"),
                 spec_row("byte", "index of the discriminator byte"),
                 spec_row("type_val", "discriminator value that selects this group"),
             ],
