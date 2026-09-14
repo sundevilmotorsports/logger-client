@@ -1,3 +1,7 @@
+//! MoTeC i2 `.ld` binary log writer, plus the SDM26 channel table (short
+//! name, units, calibration) that turns our decoded columns into
+//! MoTeC friendly channels.
+
 use crate::log_parse::ParsedLog;
 
 const LOG_HEADER_SIZE: usize = 1762;
@@ -18,18 +22,13 @@ struct Channel {
 
 /// Builds a `.ld` file from an already-parsed log (see [`crate::log_parse`])
 pub fn build_ld(parsed: &ParsedLog) -> Vec<u8> {
-    let freq_hz = infer_freq_hz(parsed).unwrap_or(20); // 20 Hz matches logging.rs's LOG_HZ
-
-    let ts_index = parsed
-        .columns
-        .iter()
-        .position(|c| c.eq_ignore_ascii_case("timestamp"));
+    let freq_hz = infer_freq_hz(parsed).unwrap_or(100); // matches logging.rs's LOG_HZ
 
     let channels: Vec<Channel> = parsed
         .columns
         .iter()
         .enumerate()
-        .filter(|(idx, name)| Some(*idx) != ts_index && !is_excluded(name))
+        .filter(|(_, name)| !is_excluded(name))
         .map(|(idx, name)| {
             let meta = lookup(name);
             let samples = parsed
@@ -41,7 +40,7 @@ pub fn build_ld(parsed: &ParsedLog) -> Vec<u8> {
                 })
                 .collect();
             Channel {
-                name: meta.display.to_string(),
+                name: name.clone(),
                 short_name: meta.short.to_string(),
                 units: meta.units.to_string(),
                 freq_hz,
@@ -55,7 +54,7 @@ pub fn build_ld(parsed: &ParsedLog) -> Vec<u8> {
         driver: "Driver".to_string(),
         vehicle: "SDM26".to_string(),
         venue: "Track".to_string(),
-        comment: format!("{} channels, logger firmware export", channels.len()),
+        comment: format!("{} channels", channels.len()),
         event_name: "Full Data Session".to_string(),
         event_session: "All channels".to_string(),
         event_comment: format!("{} channels", channels.len()),
@@ -215,7 +214,6 @@ fn put_str(buf: &mut [u8], at: usize, len: usize, s: &str) {
 }
 
 struct ChannelMeta {
-    display: &'static str,
     short: &'static str,
     units: &'static str,
     convert: fn(f64) -> f64,
@@ -225,50 +223,52 @@ fn identity(v: f64) -> f64 {
     v
 }
 
-/// Channel metadata + calibration, keyed by our CSV column name. Falls back
-/// to the name itself (short name truncated to 8 bytes, no units, no
+/// Short name + units + calibration, keyed by our CSV column name. Falls
+/// back to the name itself (short name truncated to 8 bytes, no units, no
 /// conversion) for anything not in the table -- still a valid MoTeC channel,
 /// just without curated units.
 fn lookup(name: &str) -> ChannelMeta {
     match name {
+        // Our schema's first column (see sdm_utils::logfmt); devices.py's
+        // equivalent is "TS" with conversion_factor=1e-6 (raw benji2
+        // microseconds -> seconds) and short_name="Time". Ours is already
+        // milliseconds, so just /1000.
+        "timestamp" => ChannelMeta {
+            short: "Time",
+            units: "s",
+            convert: |v| v / 1000.0,
+        },
         "p_F_brake" => ChannelMeta {
-            display: "p_F_brake",
             short: "p_F_brake",
             units: "kPa",
             convert: identity,
         },
         "p_R_brake" => ChannelMeta {
-            display: "p_R_brake",
             short: "p_R_brake",
             units: "kPa",
             convert: identity,
         },
         "Steering" => ChannelMeta {
-            display: "Steering",
             short: "Steering",
             units: "deg",
             convert: |v| 0.084769 * (v - 1430.0),
         },
         "l_FL_damper" => ChannelMeta {
-            display: "l_FL_damper",
             short: "l_FL_damper",
             units: "mm",
             convert: |v| -0.018586 * (v - 1311.0),
         },
         "l_FR_damper" => ChannelMeta {
-            display: "l_FR_damper",
             short: "l_FR_damper",
             units: "mm",
             convert: |v| -0.018444 * (v - 1324.0),
         },
         "l_RR_damper" => ChannelMeta {
-            display: "l_RR_damper",
             short: "l_RR_damper",
             units: "mm",
             convert: |v| -0.018498 * (v - 1370.0),
         },
         "l_RL_damper" => ChannelMeta {
-            display: "l_RL_damper",
             short: "l_RL_damper",
             units: "mm",
             convert: |v| -0.018600 * (v - 1403.0),
@@ -277,524 +277,437 @@ fn lookup(name: &str) -> ChannelMeta {
         // logging.rs's PowerColumns) -- identity here, not devices.py's
         // factor, to avoid scaling twice.
         "amp_Batt" => ChannelMeta {
-            display: "amp_Batt",
             short: "amp_Batt",
             units: "A",
             convert: identity,
         },
         "v_batt" => ChannelMeta {
-            display: "v_batt",
             short: "v_batt",
             units: "V",
             convert: identity,
         },
         "a_Lat" => ChannelMeta {
-            display: "a_Lat",
             short: "a_Lat",
             units: "G",
             convert: |v| (v * 0.122) / 1000.0,
         },
         "a_Long" => ChannelMeta {
-            display: "a_Long",
             short: "a_Long",
             units: "g",
             convert: |v| (v * 0.122) / 1000.0,
         },
         "a_Vert" => ChannelMeta {
-            display: "a_Vert",
             short: "a_Vert",
             units: "g",
             convert: |v| (v * 0.122) / 1000.0,
         },
         "r_Pitch" => ChannelMeta {
-            display: "r_Pitch",
             short: "r_Pitch",
             units: "deg/s",
             convert: |v| (v * 17.50) / 1000.0,
         },
         "r_Roll" => ChannelMeta {
-            display: "r_Roll",
             short: "r_Roll",
             units: "deg/s",
             convert: |v| (v * 17.50) / 1000.0,
         },
         "r_Yaw" => ChannelMeta {
-            display: "r_Yaw",
             short: "r_Yaw",
             units: "deg/s",
             convert: |v| (v * 17.50) / 1000.0,
         },
         "FR_SG" => ChannelMeta {
-            display: "f_FR_PartTBD",
             short: "f_FR_PartTBD",
             units: "raw",
             convert: identity,
         },
         "FL_SG" => ChannelMeta {
-            display: "f_FL_PartTBD",
             short: "f_FL_PartTBD",
             units: "",
             convert: |v| -11052026.1 * v + 2606.22253,
         },
         "RL_SG" => ChannelMeta {
-            display: "f_RL_PartTBD",
             short: "f_RL_PartTBD",
             units: "",
             convert: |v| -1401922.44 * v + 92026.0137,
         },
         "RR_SG" => ChannelMeta {
-            display: "f_RR_PartTBD",
             short: "f_RR_PartTBD",
             units: "",
             convert: identity,
         },
         "t_FL_amb" => ChannelMeta {
-            display: "t_FL_amb",
             short: "t_FL_amb",
             units: "C",
             convert: identity,
         },
         "FLW_OBJ" => ChannelMeta {
-            display: "FL Wheel Object",
             short: "FLW_Obj",
             units: "",
             convert: identity,
         },
         "r_FL_wheel" => ChannelMeta {
-            display: "r_FL_wheel",
             short: "r_FL_wheel",
             units: "rpm",
             convert: identity,
         },
         "t_FR_amb" => ChannelMeta {
-            display: "t_FR_amb",
             short: "t_FR_amb",
             units: "C",
             convert: identity,
         },
         "FRW_OBJ" => ChannelMeta {
-            display: "FR Wheel Object",
             short: "FRW_Obj",
             units: "",
             convert: identity,
         },
         "r_FR_wheel" => ChannelMeta {
-            display: "r_FR_wheel",
             short: "r_FR_wheel",
             units: "rpm",
             convert: identity,
         },
         "t_RR_amb" => ChannelMeta {
-            display: "t_RR_amb",
             short: "t_RR_amb",
             units: "C",
             convert: identity,
         },
         "RRW_OBJ" => ChannelMeta {
-            display: "RR Wheel Object",
             short: "RRW_Obj",
             units: "",
             convert: identity,
         },
         "r_RR_wheel" => ChannelMeta {
-            display: "r_RR_wheel",
             short: "r_RR_wheel",
             units: "rpm",
             convert: identity,
         },
         "t_RL_amb" => ChannelMeta {
-            display: "t_RL_amb",
             short: "t_RL_amb",
             units: "C",
             convert: identity,
         },
         "RLW_OBJ" => ChannelMeta {
-            display: "RL Wheel Object",
             short: "RLW_Obj",
             units: "",
             convert: identity,
         },
         "r_RL_wheel" => ChannelMeta {
-            display: "r_RL_wheel",
             short: "r_RL_wheel",
             units: "rpm",
             convert: identity,
         },
         "BRAKE_FLUID" => ChannelMeta {
-            display: "Brake Fluid",
             short: "BrkFluid",
             units: "",
             convert: identity,
         },
         "THROTTLE_LOAD" => ChannelMeta {
-            display: "Throttle Load",
             short: "Throttle",
             units: "%",
             convert: identity,
         },
         "BRAKE_LOAD" => ChannelMeta {
-            display: "Brake Load",
             short: "Brake",
             units: "%",
             convert: identity,
         },
         "DRS" => ChannelMeta {
-            display: "DRS",
             short: "DRS",
             units: "",
             convert: identity,
         },
         "gps_Long" => ChannelMeta {
-            display: "gps_Long",
             short: "gps_Long",
             units: "deg",
             convert: identity,
         },
         "gps_Lat" => ChannelMeta {
-            display: "gps_Lat",
             short: "gps_Lat",
             units: "deg",
             convert: identity,
         },
         "v_car_gps" => ChannelMeta {
-            display: "v_car_gps",
             short: "v_car_gps",
             units: "km/h",
             convert: identity,
         },
         "gps_fix" => ChannelMeta {
-            display: "gps_fix",
             short: "gps_fix",
             units: "",
             convert: identity,
         },
         "r_engine" => ChannelMeta {
-            display: "r_engine",
             short: "r_engine",
             units: "rpm",
             convert: identity,
         },
         "t_eng_coolant" => ChannelMeta {
-            display: "t_eng_coolant",
             short: "t_eng_coolant",
             units: "C",
             convert: |v| v - 50.0,
         },
         "t_oil" => ChannelMeta {
-            display: "t_oil",
             short: "t_oil",
             units: "C",
             convert: |v| v - 50.0,
         },
         "p_oil" => ChannelMeta {
-            display: "p_oil",
             short: "p_oil",
             units: "kPa",
             convert: identity,
         },
         "neutral" => ChannelMeta {
-            display: "neutral",
             short: "neutral",
             units: "",
             convert: identity,
         },
         // Already scaled by firmware (config.json sets scale=0.01) -- identity here.
         "Lamb_1" => ChannelMeta {
-            display: "Lamb_1",
             short: "Lamb_1",
             units: "Lambda",
             convert: identity,
         },
         "%_TPS" => ChannelMeta {
-            display: "%_TPS",
             short: "%_TPS",
             units: "%",
             convert: identity,
         },
         "n-Gear" => ChannelMeta {
-            display: "n-Gear",
             short: "n-Gear",
             units: "",
             convert: identity,
         },
         "v_trans_out" => ChannelMeta {
-            display: "v_trans_out",
             short: "v_trans_out",
             units: "km/h",
             convert: |v| 0.1 * v,
         },
         "%_APS_main" => ChannelMeta {
-            display: "%_APS_main",
             short: "%_APS_main",
             units: "%",
             convert: |v| 0.1 * v,
         },
         "p_Fuel" => ChannelMeta {
-            display: "p_Fuel",
             short: "p_Fuel",
             units: "kPa",
             convert: identity,
         },
         "n_knock_count" => ChannelMeta {
-            display: "Knock Count Global",
             short: "Knock_Cnt",
             units: "",
             convert: identity,
         },
         "d_ign_angle" => ChannelMeta {
-            display: "Ignition Angle",
             short: "Ign_Angle",
             units: "deg",
             convert: identity,
         },
         "%_ign_cut" => ChannelMeta {
-            display: "Ignition Cut",
             short: "Ign_Cut",
             units: "%",
             convert: identity,
         },
         "%_fuel_cut" => ChannelMeta {
-            display: "Fuel Cut",
             short: "Fuel_Cut",
             units: "%",
             convert: identity,
         },
         "r_idle_target" => ChannelMeta {
-            display: "Idle Target",
             short: "Idle_Tgt",
             units: "rpm",
             convert: identity,
         },
         "%_lambda_corr" => ChannelMeta {
-            display: "CL Lambda Fuel Corr",
             short: "Lam_Corr",
             units: "%",
             convert: identity,
         },
         "Lambda_Target_Err" => ChannelMeta {
-            display: "Lambda Target Error",
             short: "Lam_Err",
             units: "",
             convert: identity,
         },
         "in_gear" => ChannelMeta {
-            display: "In Driving Gear",
             short: "In_Gear",
             units: "",
             convert: identity,
         },
         "upshift_act" => ChannelMeta {
-            display: "Aux 5 - UpShift Actuator",
             short: "UpShift",
             units: "",
             convert: identity,
         },
         "downshift_act" => ChannelMeta {
-            display: "Aux 8 - DownShift Actuator",
             short: "DnShift",
             units: "",
             convert: identity,
         },
         "launch_ctrl_stat" => ChannelMeta {
-            display: "Launch Control Status",
             short: "Launch",
             units: "",
             convert: identity,
         },
         "eng_fan_1" => ChannelMeta {
-            display: "Engine Fan 1",
             short: "Eng_Fan1",
             units: "",
             convert: identity,
         },
         "%_fuel_left" => ChannelMeta {
-            display: "Fuel Left",
             short: "Fuel_Lvl",
             units: "%",
             convert: identity,
         },
         "t_fuel_accel" => ChannelMeta {
-            display: "t_fuel_accel",
             short: "t_fuel_accel",
             units: "ms",
             convert: |v| 0.001 * v,
         },
         "acc_distance" => ChannelMeta {
-            display: "acc_distance",
             short: "acc_distance",
             units: "km",
             convert: |v| 0.1 * v,
         },
         "p_MAP" => ChannelMeta {
-            display: "p_MAP",
             short: "p_MAP",
             units: "kPa",
             convert: identity,
         },
         "t_MAT" => ChannelMeta {
-            display: "t_MAT",
             short: "t_MAT",
             units: "C",
             convert: |v| v - 50.0,
         },
         "a_Lat_ecu" => ChannelMeta {
-            display: "a_Lat_ecu",
             short: "a_Lat_ecu",
             units: "g",
             convert: unwrap_u16_then_milli,
         },
         "a_Long_ecu" => ChannelMeta {
-            display: "a_Long_ecu",
             short: "a_Long_ecu",
             units: "g",
             convert: unwrap_u16_then_milli,
         },
         "a_Vert_ecu" => ChannelMeta {
-            display: "a_Vert_ecu",
             short: "a_Vert_ecu",
             units: "g",
             convert: unwrap_u16_then_milli,
         },
         "TESTNO" => ChannelMeta {
-            display: "Test Number",
             short: "TestNo",
             units: "",
             convert: identity,
         },
         "DTC_FLW" => ChannelMeta {
-            display: "DTC FL Wheel",
             short: "DTC_FLW",
             units: "",
             convert: identity,
         },
         "DTC_FRW" => ChannelMeta {
-            display: "DTC FR Wheel",
             short: "DTC_FRW",
             units: "",
             convert: identity,
         },
         "DTC_RLW" => ChannelMeta {
-            display: "DTC RL Wheel",
             short: "DTC_RLW",
             units: "",
             convert: identity,
         },
         "DTC_RRW" => ChannelMeta {
-            display: "DTC RR Wheel",
             short: "DTC_RRW",
             units: "",
             convert: identity,
         },
         "DTC_FLSG" => ChannelMeta {
-            display: "DTC FL Strain",
             short: "DTC_FLSG",
             units: "",
             convert: identity,
         },
         "DTC_FRSG" => ChannelMeta {
-            display: "DTC FR Strain",
             short: "DTC_FRSG",
             units: "",
             convert: identity,
         },
         "DTC_RLSG" => ChannelMeta {
-            display: "DTC RL Strain",
             short: "DTC_RLSG",
             units: "",
             convert: identity,
         },
         "DTC_RRSG" => ChannelMeta {
-            display: "DTC RR Strain",
             short: "DTC_RRSG",
             units: "",
             convert: identity,
         },
         "DTC_IMU" => ChannelMeta {
-            display: "DTC IMU",
             short: "DTC_IMU",
             units: "",
             convert: identity,
         },
         "GPS_0_" => ChannelMeta {
-            display: "GPS 0",
             short: "GPS_0",
             units: "",
             convert: identity,
         },
         "GPS_1_" => ChannelMeta {
-            display: "GPS 1",
             short: "GPS_1",
             units: "",
             convert: identity,
         },
         "FLT_TTA" => ChannelMeta {
-            display: "FL Tire Temp A",
             short: "FLT_TTA",
             units: "",
             convert: identity,
         },
         "FLT_TTB" => ChannelMeta {
-            display: "FL Tire Temp B",
             short: "FLT_TTB",
             units: "",
             convert: identity,
         },
         "FRT_TTA" => ChannelMeta {
-            display: "FR Tire Temp A",
             short: "FRT_TTA",
             units: "",
             convert: identity,
         },
         "FRT_TTB" => ChannelMeta {
-            display: "FR Tire Temp B",
             short: "FRT_TTB",
             units: "",
             convert: identity,
         },
         "RLT_TTA" => ChannelMeta {
-            display: "RL Tire Temp A",
             short: "RLT_TTA",
             units: "",
             convert: identity,
         },
         "RLT_TTB" => ChannelMeta {
-            display: "RL Tire Temp B",
             short: "RLT_TTB",
             units: "",
             convert: identity,
         },
         "RRT_TTA" => ChannelMeta {
-            display: "RR Tire Temp A",
             short: "RRT_TTA",
             units: "",
             convert: identity,
         },
         "RRT_TTB" => ChannelMeta {
-            display: "RR Tire Temp B",
             short: "RRT_TTB",
             units: "",
             convert: identity,
         },
         "CH_COUNT" => ChannelMeta {
-            display: "Channel Count",
             short: "CH_Count",
             units: "",
             convert: identity,
         },
         "FR_Wheel_Speed" => ChannelMeta {
-            display: "FR Wheel Speed",
             short: "FR_wspd",
             units: "km/h",
             convert: identity,
         },
         "FL_Wheel_Speed" => ChannelMeta {
-            display: "FL Wheel Speed",
             short: "FL_wspd",
             units: "km/h",
             convert: identity,
         },
         _ => ChannelMeta {
-            display: leak(name),
             short: leak(&name[..name.len().min(8)]),
             units: "",
             convert: identity,
@@ -836,12 +749,14 @@ mod tests {
     }
 
     #[test]
-    fn excludes_timestamp_channel_and_keeps_others() {
+    fn keeps_timestamp_as_a_real_channel() {
         let bytes = build_ld(&sample_log());
-        // 3 channels expected: Steering, amp_Batt, some_unmapped_channel
-        // (timestamp excluded). numchannels lives at header offset 86.
+        // 4 channels expected: timestamp, Steering, amp_Batt,
+        // some_unmapped_channel -- unlike devices.py's "TS", timestamp is
+        // NOT excluded (conversion_pipeline.py keeps its own time column as
+        // a regular channel too). numchannels lives at header offset 86.
         let numchannels = u32::from_le_bytes(bytes[86..90].try_into().unwrap());
-        assert_eq!(numchannels, 3);
+        assert_eq!(numchannels, 4);
     }
 
     #[test]
@@ -853,12 +768,13 @@ mod tests {
         assert_eq!(firstchannelpos, LOG_HEADER_SIZE + EVENT_SIZE);
         assert_eq!(
             firstchanneldatapos,
-            firstchannelpos + 3 * CHANNEL_HEADER_SIZE
+            firstchannelpos + 4 * CHANNEL_HEADER_SIZE
         );
 
         // Walk the channel linked list via nextpos and check each channel's
-        // own datapos/numsamples/name against what build_ld put there.
-        let expected = ["Steering", "amp_Batt", "some_unmapped_channel"];
+        // own datapos/numsamples/name against what build_ld put there. Names
+        // are always our own raw column names (see build_ld's doc comment).
+        let expected = ["timestamp", "Steering", "amp_Batt", "some_unmapped_channel"];
         let mut pos = firstchannelpos;
         let mut expected_datapos = firstchanneldatapos;
         for (i, name) in expected.iter().enumerate() {
@@ -896,15 +812,39 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_channel_converts_ms_to_seconds() {
+        let bytes = build_ld(&sample_log());
+        let firstchannelpos = LOG_HEADER_SIZE + EVENT_SIZE;
+        let firstchanneldatapos = firstchannelpos + 4 * CHANNEL_HEADER_SIZE;
+
+        let short =
+            std::str::from_utf8(&bytes[firstchannelpos + 64..firstchannelpos + 64 + 4]).unwrap();
+        assert_eq!(short, "Time");
+
+        // Raw ms 0/50/100 -> seconds 0/0.05/0.1.
+        let sample = |i: usize| {
+            let at = firstchanneldatapos + i * 4;
+            f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+        };
+        assert!((sample(0) - 0.0).abs() < 1e-4);
+        assert!((sample(1) - 0.05).abs() < 1e-4);
+        assert!((sample(2) - 0.1).abs() < 1e-4);
+    }
+
+    #[test]
     fn steering_channel_applies_calibration() {
         let bytes = build_ld(&sample_log());
         let firstchannelpos = LOG_HEADER_SIZE + EVENT_SIZE;
-        let firstchanneldatapos = firstchannelpos + 3 * CHANNEL_HEADER_SIZE;
-
-        // Steering is the first channel: samples are raw 1430/1440/1450 ->
-        // 0.084769 * (v - 1430) per devices.py.
+        // Steering is the second channel (after timestamp): samples are raw
+        // 1430/1440/1450 -> 0.084769 * (v - 1430) per devices.py.
+        let datapos = u32::from_le_bytes(
+            bytes[firstchannelpos + CHANNEL_HEADER_SIZE + 8
+                ..firstchannelpos + CHANNEL_HEADER_SIZE + 12]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         let sample = |i: usize| {
-            let at = firstchanneldatapos + i * 4;
+            let at = datapos + i * 4;
             f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
         };
         assert!((sample(0) - 0.0).abs() < 1e-4);
@@ -916,11 +856,11 @@ mod tests {
     fn already_scaled_channel_gets_identity_conversion() {
         let bytes = build_ld(&sample_log());
         let firstchannelpos = LOG_HEADER_SIZE + EVENT_SIZE;
-        // amp_Batt is the second channel: firmware already scaled it, so the
-        // MoTeC table must NOT apply factor again.
+        // amp_Batt is the third channel: firmware already scaled it, so the
+        // MoTeC table must NOT apply a factor again.
         let datapos = u32::from_le_bytes(
-            bytes[firstchannelpos + CHANNEL_HEADER_SIZE + 8
-                ..firstchannelpos + CHANNEL_HEADER_SIZE + 12]
+            bytes[firstchannelpos + 2 * CHANNEL_HEADER_SIZE + 8
+                ..firstchannelpos + 2 * CHANNEL_HEADER_SIZE + 12]
                 .try_into()
                 .unwrap(),
         ) as usize;
@@ -931,7 +871,6 @@ mod tests {
     #[test]
     fn unmapped_channel_falls_back_to_its_own_name() {
         let meta = lookup("some_unmapped_channel");
-        assert_eq!(meta.display, "some_unmapped_channel");
         assert_eq!(meta.short, "some_unm");
         assert_eq!(meta.units, "");
     }
