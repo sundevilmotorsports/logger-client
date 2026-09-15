@@ -10,7 +10,8 @@ pub mod theme;
 pub mod toast;
 
 use gpui::{
-    App, AppContext, AssetSource, Bounds, Menu, MenuItem, SharedString, WindowOptions, px, size,
+    App, AppContext, AssetSource, Bounds, KeyBinding, Menu, MenuItem, SharedString,
+    WindowOptions, px, size,
 };
 use gpui_component::theme::{Theme, ThemeMode};
 use root_view::ParseLogFile;
@@ -45,6 +46,8 @@ fn main() {
                 name: "File".into(),
                 items: vec![MenuItem::action("Parse Log File...", ParseLogFile)],
             }]);
+            
+            cx.bind_keys([KeyBinding::new("secondary-o", ParseLogFile, None)]);
 
             let bounds = Bounds::centered(None, size(px(780.), px(540.)), cx);
             cx.open_window(
