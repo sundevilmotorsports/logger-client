@@ -14,7 +14,7 @@ use gpui::{
     WindowOptions, px, size,
 };
 use gpui_component::theme::{Theme, ThemeMode};
-use root_view::ParseLogFile;
+use root_view::{ParseLogFile, ParseLogFolder};
 use rust_embed::RustEmbed;
 
 #[derive(Clone, Copy, RustEmbed)]
@@ -44,9 +44,12 @@ fn main() {
 
             cx.set_menus(vec![Menu {
                 name: "File".into(),
-                items: vec![MenuItem::action("Parse Log File...", ParseLogFile)],
+                items: vec![
+                    MenuItem::action("Parse Log File...", ParseLogFile),
+                    MenuItem::action("Parse Log Folder...", ParseLogFolder),
+                ],
             }]);
-            
+
             cx.bind_keys([KeyBinding::new("secondary-o", ParseLogFile, None)]);
 
             let bounds = Bounds::centered(None, size(px(780.), px(540.)), cx);

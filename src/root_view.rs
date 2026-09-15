@@ -17,7 +17,7 @@ use crate::toast::{self, Toast, ToastKind};
 
 const TOAST_LIFETIME: Duration = Duration::from_secs(4);
 
-actions!(logger_client, [ParseLogFile]);
+actions!(logger_client, [ParseLogFile, ParseLogFolder]);
 
 pub struct RootView {
     state: DeviceState,
@@ -107,6 +107,19 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |weak, cx| parse_log_file_flow(weak, cx).await)
+            .detach();
+    }
+
+    /// `File > Parse Log Folder...`: pick a directory and decode every
+    /// `.bin` log inside it to CSV + `.ld`, with no device connection
+    /// required.
+    fn on_parse_log_folder(
+        &mut self,
+        _: &ParseLogFolder,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |weak, cx| parse_log_folder_flow(weak, cx).await)
             .detach();
     }
 
@@ -371,6 +384,106 @@ async fn parse_log_file_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option<S
     )))
 }
 
+/// Prompts for a directory, decodes every `.bin` log file inside it (next to
+/// itself as `<name>.csv` and `<name>.ld`), and reports a summary as a
+/// toast. Independent of any live device connection.
+async fn parse_log_folder_flow(weak: WeakEntity<RootView>, cx: &mut AsyncApp) {
+    let result = parse_log_folder_flow_inner(cx).await;
+    let (message, kind) = match result {
+        Ok(Some(message)) => (message, ToastKind::Success),
+        Ok(None) => return, // user cancelled the dialog; nothing to report
+        Err(e) => (format!("parse log folder failed: {e}"), ToastKind::Error),
+    };
+    weak.update(cx, |view, cx| view.push_toast(cx, message, kind))
+        .ok();
+}
+
+async fn parse_log_folder_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option<String>> {
+    let open_rx = cx.update(|app| {
+        app.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Parse Folder".into()),
+        })
+    })?;
+    let Some(mut paths) = open_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("open dialog closed unexpectedly"))??
+    else {
+        return Ok(None);
+    };
+    let dir = paths.remove(0);
+
+    let mut bin_paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| anyhow::anyhow!("couldn't read {}: {e}", dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|ext| ext == "bin"))
+        .collect();
+    bin_paths.sort();
+
+    if bin_paths.is_empty() {
+        return Ok(Some(format!("no .bin log files found in {}", dir.display())));
+    }
+
+    // Parsing is synchronous CPU work; run the whole batch off the UI thread
+    // like the single-file path does.
+    let parse_handle = std::thread::spawn(move || {
+        let mut ok_count = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+        for src in &bin_paths {
+            match parse_one_log_to_csv_and_ld(src) {
+                Ok(()) => ok_count += 1,
+                Err(e) => errors.push(format!(
+                    "{}: {e}",
+                    src.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                )),
+            }
+        }
+        (ok_count, bin_paths.len(), errors)
+    });
+    let (ok_count, total, errors) = parse_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("log parser thread panicked"))?;
+
+    let summary = if errors.is_empty() {
+        format!(
+            "parsed {ok_count} log file(s) in {}",
+            dir.display()
+        )
+    } else {
+        format!(
+            "parsed {ok_count}/{total} log file(s) in {} ({} failed: {})",
+            dir.display(),
+            errors.len(),
+            errors.join("; ")
+        )
+    };
+
+    Ok(Some(summary))
+}
+
+/// Decodes a single `.bin` log at `src` and writes `<stem>.csv` and
+/// `<stem>.ld` alongside it. Runs the (synchronous, CPU-bound) parser on the
+/// calling thread -- callers batching many files should already be off the
+/// UI thread.
+fn parse_one_log_to_csv_and_ld(src: &PathBuf) -> anyhow::Result<()> {
+    let raw =
+        std::fs::read(src).map_err(|e| anyhow::anyhow!("couldn't read {}: {e}", src.display()))?;
+    let parsed = log_parse::parse_log(&raw, |_, _| {})?;
+
+    let csv_dest = src.with_extension("csv");
+    std::fs::write(&csv_dest, log_parse::to_csv(&parsed))
+        .map_err(|e| anyhow::anyhow!("couldn't write {}: {e}", csv_dest.display()))?;
+
+    let ld_dest = src.with_extension("ld");
+    std::fs::write(&ld_dest, crate::motec::build_ld(&parsed))
+        .map_err(|e| anyhow::anyhow!("couldn't write {}: {e}", ld_dest.display()))?;
+
+    Ok(())
+}
+
 impl Focusable for RootView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -408,6 +521,7 @@ impl Render for RootView {
         div()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_parse_log_file))
+            .on_action(cx.listener(Self::on_parse_log_folder))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // Key events bubble from whatever's focused up through this
                 // root handler, so without this check typing "q" into a
