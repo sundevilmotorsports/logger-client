@@ -129,17 +129,21 @@ impl LdDocument {
         put_u32(&mut buf, 8, firstchannelpos);
         put_u32(&mut buf, 12, firstchanneldatapos);
         put_u32(&mut buf, 36, LOG_HEADER_SIZE as u32); // eventpos
-        put_u32(&mut buf, 66, 1_000_000); // sig1
-        put_u32(&mut buf, 70, 12007); // serial
+        put_u16(&mut buf, 64, 1);
+        put_u16(&mut buf, 66, 0x4240);
+        put_u16(&mut buf, 68, 0xf);
+        put_u32(&mut buf, 70, 0x1f44); // serial
         put_str(&mut buf, 74, 8, "ADL");
         put_u16(&mut buf, 82, 420); // version
-        put_u16(&mut buf, 84, 128); // sig2
+        put_u16(&mut buf, 84, 0xadb0);
         put_u32(&mut buf, 86, numchannels);
         put_str(&mut buf, 94, 16, &self.date);
         put_str(&mut buf, 126, 16, &self.time);
         put_str(&mut buf, 158, 64, &self.driver);
         put_str(&mut buf, 222, 64, &self.vehicle);
         put_str(&mut buf, 350, 64, &self.venue);
+        // "Enable pro logging" flag
+        put_u32(&mut buf, 1502, 0x000c81a4);
         put_str(&mut buf, 1572, 64, &self.comment);
 
         // Event
