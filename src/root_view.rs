@@ -424,7 +424,10 @@ async fn parse_log_folder_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option
     bin_paths.sort();
 
     if bin_paths.is_empty() {
-        return Ok(Some(format!("no .bin log files found in {}", dir.display())));
+        return Ok(Some(format!(
+            "no .bin log files found in {}",
+            dir.display()
+        )));
     }
 
     // Parsing is synchronous CPU work; run the whole batch off the UI thread
@@ -437,7 +440,9 @@ async fn parse_log_folder_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option
                 Ok(()) => ok_count += 1,
                 Err(e) => errors.push(format!(
                     "{}: {e}",
-                    src.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                    src.file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
                 )),
             }
         }
@@ -448,10 +453,7 @@ async fn parse_log_folder_flow_inner(cx: &mut AsyncApp) -> anyhow::Result<Option
         .map_err(|_| anyhow::anyhow!("log parser thread panicked"))?;
 
     let summary = if errors.is_empty() {
-        format!(
-            "parsed {ok_count} log file(s) in {}",
-            dir.display()
-        )
+        format!("parsed {ok_count} log file(s) in {}", dir.display())
     } else {
         format!(
             "parsed {ok_count}/{total} log file(s) in {} ({} failed: {})",

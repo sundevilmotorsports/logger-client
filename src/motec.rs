@@ -217,10 +217,10 @@ fn put_str(buf: &mut [u8], at: usize, len: usize, s: &str) {
     buf[at..at + n].copy_from_slice(&bytes[..n]);
 }
 
-struct ChannelMeta {
+pub(crate) struct ChannelMeta {
     short: &'static str,
-    units: &'static str,
-    convert: fn(f64) -> f64,
+    pub(crate) units: &'static str,
+    pub(crate) convert: fn(f64) -> f64,
 }
 
 fn identity(v: f64) -> f64 {
@@ -231,7 +231,10 @@ fn identity(v: f64) -> f64 {
 /// back to the name itself (short name truncated to 8 bytes, no units, no
 /// conversion) for anything not in the table -- still a valid MoTeC channel,
 /// just without curated units.
-fn lookup(name: &str) -> ChannelMeta {
+///
+/// Shared with [`crate::log_parse::to_csv`] so the CSV and the .ld apply the
+/// exact same calibration.
+pub(crate) fn lookup(name: &str) -> ChannelMeta {
     match name {
         // Our schema's first column (see sdm_utils::logfmt); devices.py's
         // equivalent is "TS" with conversion_factor=1e-6 (raw benji2
@@ -433,6 +436,11 @@ fn lookup(name: &str) -> ChannelMeta {
         "v_car_gps" => ChannelMeta {
             short: "v_car_gps",
             units: "km/h",
+            convert: identity,
+        },
+        "gps_heading" => ChannelMeta {
+            short: "GPS_Hdg",
+            units: "deg",
             convert: identity,
         },
         "gps_fix" => ChannelMeta {

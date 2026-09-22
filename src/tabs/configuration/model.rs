@@ -10,6 +10,17 @@ pub(super) struct CanDeviceForm {
     pub(super) engine: bool,
     pub(super) signals: SignalsForm,
     pub(super) expanded: bool,
+    /// Signal count, captured at load time since `signals` starts as an
+    /// empty placeholder until materialized; see `raw_signals` below.
+    pub(super) signal_count: usize,
+    /// The `"signals"` JSON this device was loaded with, kept around so
+    /// `signals` can be materialized lazily (only when the device is first
+    /// expanded) instead of eagerly creating an `InputState` entity per
+    /// field of every signal of every device on load -- with dozens of CAN
+    /// devices that was hundreds of entities created synchronously, slow
+    /// enough to look like a freeze. `None` once materialized (or for a
+    /// freshly-added device, which has nothing to lazily load).
+    pub(super) raw_signals: Option<serde_json::Value>,
 }
 
 impl CanDeviceForm {
@@ -21,6 +32,30 @@ impl CanDeviceForm {
             engine: false,
             signals: SignalsForm::Fixed(Vec::new()),
             expanded: false,
+            signal_count: 0,
+            raw_signals: None,
+        }
+    }
+
+    /// Materializes `signals` from `raw_signals` if it hasn't been already.
+    /// Call before showing or serializing this device's signal editor.
+    pub(super) fn ensure_materialized(&mut self, window: &mut Window, cx: &mut Context<RootView>) {
+        if let Some(raw) = self.raw_signals.take() {
+            self.signals = signals_from_json(&raw, window, cx);
+        }
+    }
+
+    /// Signal count for display: the load-time snapshot before
+    /// materialization (cheap, no need to touch `signals`), the live count
+    /// after (so it tracks +/- signal edits once the editor's open).
+    pub(super) fn display_signal_count(&self) -> usize {
+        if self.raw_signals.is_some() {
+            self.signal_count
+        } else {
+            match &self.signals {
+                SignalsForm::Fixed(sigs) => sigs.len(),
+                SignalsForm::Muxed { groups, .. } => groups.iter().map(|g| g.signals.len()).sum(),
+            }
         }
     }
 }
@@ -198,7 +233,7 @@ impl SignalsForm {
     }
 }
 
-fn signals_from_json(
+pub(super) fn signals_from_json(
     v: &serde_json::Value,
     window: &mut Window,
     cx: &mut Context<RootView>,
@@ -272,11 +307,24 @@ impl AdcChannelForm {
     }
 }
 
-pub(super) fn signal_count(s: &SignalsForm) -> usize {
-    match s {
-        SignalsForm::Fixed(sigs) => sigs.len(),
-        SignalsForm::Muxed { groups, .. } => groups.iter().map(|g| g.signals.len()).sum(),
+/// Counts signals in the raw `"signals"` JSON -- works without
+/// materializing (see `CanDeviceForm::raw_signals`).
+fn signal_count_in_json(v: &serde_json::Value) -> usize {
+    if let Some(arr) = v.get("Fixed").and_then(|v| v.as_array()) {
+        return arr.len();
     }
+    if let Some(groups) = v
+        .get("Muxed")
+        .and_then(|m| m.get("groups"))
+        .and_then(|v| v.as_array())
+    {
+        return groups
+            .iter()
+            .filter_map(|g| g.get("signals").and_then(|v| v.as_array()))
+            .map(|s| s.len())
+            .sum();
+    }
+    0
 }
 
 fn parse_can_id(s: &str) -> Option<u32> {
@@ -302,16 +350,19 @@ pub(super) fn can_devices_from_json(
                         .and_then(|v| v.as_u64())
                         .map(|n| format!("0x{n:X}"))
                         .unwrap_or_default();
+                    let raw_signals = d.get("signals").cloned();
+                    let signal_count = raw_signals.as_ref().map(signal_count_in_json).unwrap_or(0);
                     CanDeviceForm {
                         id: cx.new(|cx| InputState::new(window, cx).default_value(id_text)),
                         extended: d.get("extended").and_then(|v| v.as_bool()).unwrap_or(false),
                         fd: d.get("fd").and_then(|v| v.as_bool()).unwrap_or(false),
                         engine: d.get("bus").and_then(|v| v.as_str()) == Some("Engine"),
-                        signals: d
-                            .get("signals")
-                            .map(|s| signals_from_json(s, window, cx))
-                            .unwrap_or_else(|| SignalsForm::Fixed(Vec::new())),
+                        // Not materialized yet -- ensure_materialized() does
+                        // that lazily, on first expand.
+                        signals: SignalsForm::Fixed(Vec::new()),
                         expanded: false,
+                        signal_count,
+                        raw_signals,
                     }
                 })
                 .collect()
@@ -371,7 +422,12 @@ pub(super) fn build_config_json(
         let id_text = d.id.read(cx).value().to_string();
         let id = parse_can_id(&id_text)
             .ok_or_else(|| anyhow::anyhow!("CAN device {}: invalid id \"{id_text}\"", i + 1))?;
-        let signals = d.signals.to_json(cx, &format!("CAN device {}", i + 1))?;
+        // Never expanded/edited: pass the original JSON straight through
+        // instead of serializing the empty placeholder form.
+        let signals = match &d.raw_signals {
+            Some(raw) => raw.clone(),
+            None => d.signals.to_json(cx, &format!("CAN device {}", i + 1))?,
+        };
         can_devices.push(serde_json::json!({
             "id": id,
             "extended": d.extended,

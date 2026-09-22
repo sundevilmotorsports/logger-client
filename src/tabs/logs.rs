@@ -286,8 +286,10 @@ async fn run_job_inner(
     };
 
     let raw = device::download_log(log_tx, name, on_download_progress).await?;
-    let tmp_path = std::env::temp_dir().join(name);
-    std::fs::write(&tmp_path, &raw)?;
+    let bin_dir = std::env::temp_dir().join("sdm-logger");
+    std::fs::create_dir_all(&bin_dir)?;
+    let bin_path = bin_dir.join(name);
+    std::fs::write(&bin_path, &raw)?;
 
     on_parse_progress(0);
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
@@ -312,8 +314,9 @@ async fn run_job_inner(
     std::fs::write(&ld_dest, motec::build_ld(&parsed))?;
 
     Ok(format!(
-        "parsed {} rows, saved {} and {}",
+        "parsed {} rows, saved {}, {} and {}",
         parsed.rows.len(),
+        bin_path.display(),
         dest.display(),
         ld_dest.display()
     ))

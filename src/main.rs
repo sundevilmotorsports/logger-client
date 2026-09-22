@@ -10,8 +10,8 @@ pub mod theme;
 pub mod toast;
 
 use gpui::{
-    App, AppContext, AssetSource, Bounds, KeyBinding, Menu, MenuItem, SharedString,
-    WindowOptions, px, size,
+    App, AppContext, AssetSource, Bounds, KeyBinding, Menu, MenuItem, SharedString, WindowOptions,
+    px, size,
 };
 use gpui_component::theme::{Theme, ThemeMode};
 use root_view::{ParseLogFile, ParseLogFolder};

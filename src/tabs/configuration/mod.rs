@@ -17,7 +17,6 @@ use crate::toast::ToastKind;
 use commands::{load_from_file, push_to_device, refresh, save_to_file};
 use model::{
     AdcChannelForm, CanDeviceForm, SignalForm, SignalGroupForm, SignalsForm, build_config_json,
-    signal_count,
 };
 use widgets::{can_help_panel, field_label, indented_col, row_container, section_header};
 
@@ -106,6 +105,7 @@ impl ConfigurationTab {
                             .id("config-scroll")
                             .overflow_y_scroll()
                             .flex_1()
+                            .h_full()
                             .max_w(px(640.))
                             .min_h(px(0.))
                             .child(body),
@@ -271,7 +271,7 @@ impl ConfigurationTab {
         d: &CanDeviceForm,
         cx: &mut Context<RootView>,
     ) -> AnyElement {
-        let signals = signal_count(&d.signals);
+        let signals = d.display_signal_count();
 
         let weak = cx.weak_entity();
         let remove_btn = Button::new(("can-remove", i))
@@ -334,10 +334,15 @@ impl ConfigurationTab {
             })
             .ghost()
             .small()
-            .on_click(move |_, _, app| {
+            .on_click(move |_, window, app| {
                 weak.update(app, |this, cx| {
                     let dev = &mut this.configuration_tab.can_devices[i];
                     dev.expanded = !dev.expanded;
+                    // Lazily builds the signal editor's Input entities the
+                    // first time this device is actually opened, rather
+                    // than for every device up front (see
+                    // CanDeviceForm::raw_signals).
+                    this.configuration_tab.can_devices[i].ensure_materialized(window, cx);
                     cx.notify();
                 })
                 .ok();
