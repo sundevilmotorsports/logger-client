@@ -1,0 +1,539 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Tone } from "../theme.slint";
+import { Button, ButtonKind, CheckBox, EmptyState, Field, Label, Panel, SectionHeader, Spinner } from "../widgets.slint";
+
+export struct Signal {
+    name: string,
+    start: string,
+    len: string,
+    signed: bool,
+    big-endian: bool,
+    scale: string,
+    offset: string,
+}
+
+export struct SignalGroup {
+    type-val: string,
+    signals: [Signal],
+}
+
+export struct CanDevice {
+    id: string,
+    extended: bool,
+    fd: bool,
+    engine: bool,
+    expanded: bool,
+    signal-count: int,
+    muxed: bool,
+    mux-byte: string,
+    // Used when `muxed` is false
+    signals: [Signal],
+    // Used when `muxed` is true
+    groups: [SignalGroup],
+}
+
+export struct AdcChannel {
+    name: string,
+    channel: string,
+    scale: string,
+    offset: string,
+}
+
+// Text edits and checkbox toggles are reported field by field and don't
+// round-trip back into these models; structural edits (add/remove/expand)
+// make the Rust side push fresh models.
+export global ConfigState {
+    in property <bool> show-form;
+    in property <bool> busy;
+    in property <string> status-text;
+    in property <Tone> status-tone;
+    in property <[CanDevice]> can-devices;
+    in property <[AdcChannel]> adc-channels;
+
+    callback refresh();
+    callback load-file();
+    callback save-file();
+    callback push();
+
+    callback can-add();
+    callback can-remove(dev: int);
+    callback can-id-edited(dev: int, text: string);
+    callback can-toggled(dev: int, field: string, checked: bool);
+    callback can-expand(dev: int);
+    callback set-muxed(dev: int, muxed: bool);
+    callback mux-byte-edited(dev: int, text: string);
+
+    callback group-add(dev: int);
+    callback group-remove(dev: int, group: int);
+    callback group-type-edited(dev: int, group: int, text: string);
+
+    // `group` is -1 for fixed (non-muxed) signals
+    callback signal-add(dev: int, group: int);
+    callback signal-remove(dev: int, group: int, sig: int);
+    callback signal-edited(dev: int, group: int, sig: int, field: string, text: string);
+    callback signal-toggled(dev: int, group: int, sig: int, field: string, checked: bool);
+
+    callback adc-add();
+    callback adc-remove(ch: int);
+    callback adc-edited(ch: int, field: string, text: string);
+}
+
+component FieldLabel inherits Label {
+    color: Theme.muted;
+    horizontal-stretch: 0;
+    min-width: self.preferred-width;
+}
+
+component Indented inherits HorizontalLayout {
+    padding-left: 20px;
+    Panel {
+        VerticalLayout {
+            padding: 6px;
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 4px;
+            alignment: start;
+            @children
+        }
+    }
+}
+
+component SignalEditor inherits Indented {
+    in property <Signal> sig;
+    in property <int> dev;
+    in property <int> group;
+    in property <int> index;
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        FieldLabel { text: "name"; }
+        Field {
+            width: 90px;
+            text: root.sig.name;
+            edited(t) => { ConfigState.signal-edited(root.dev, root.group, root.index, "name", t); }
+        }
+        FieldLabel { text: "start"; }
+        Field {
+            width: 40px;
+            text: root.sig.start;
+            edited(t) => { ConfigState.signal-edited(root.dev, root.group, root.index, "start", t); }
+        }
+        FieldLabel { text: "len"; }
+        Field {
+            width: 40px;
+            text: root.sig.len;
+            edited(t) => { ConfigState.signal-edited(root.dev, root.group, root.index, "len", t); }
+        }
+        Button {
+            text: "remove";
+            kind: ButtonKind.ghost;
+            clicked => { ConfigState.signal-remove(root.dev, root.group, root.index); }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        CheckBox {
+            text: "signed";
+            checked: root.sig.signed;
+            toggled(c) => { ConfigState.signal-toggled(root.dev, root.group, root.index, "signed", c); }
+        }
+        CheckBox {
+            text: "big-end";
+            checked: root.sig.big-endian;
+            toggled(c) => { ConfigState.signal-toggled(root.dev, root.group, root.index, "big_endian", c); }
+        }
+        FieldLabel { text: "scale"; }
+        Field {
+            width: 60px;
+            text: root.sig.scale;
+            edited(t) => { ConfigState.signal-edited(root.dev, root.group, root.index, "scale", t); }
+        }
+        FieldLabel { text: "offset"; }
+        Field {
+            width: 60px;
+            text: root.sig.offset;
+            edited(t) => { ConfigState.signal-edited(root.dev, root.group, root.index, "offset", t); }
+        }
+    }
+}
+
+component AddButton inherits Button {
+    kind: ButtonKind.ghost;
+}
+
+component CanDeviceEditor inherits VerticalLayout {
+    in property <CanDevice> device;
+    in property <int> dev;
+    spacing: 2px;
+
+    Panel {
+        HorizontalLayout {
+            padding: 4px;
+            padding-left: 8px;
+            padding-right: 8px;
+            spacing: 8px;
+            alignment: start;
+            FieldLabel { text: "id"; }
+            Field {
+                width: 90px;
+                text: root.device.id;
+                edited(t) => { ConfigState.can-id-edited(root.dev, t); }
+            }
+            CheckBox {
+                text: "ext";
+                checked: root.device.extended;
+                toggled(c) => { ConfigState.can-toggled(root.dev, "extended", c); }
+            }
+            CheckBox {
+                text: "fd";
+                checked: root.device.fd;
+                toggled(c) => { ConfigState.can-toggled(root.dev, "fd", c); }
+            }
+            CheckBox {
+                text: "engine";
+                checked: root.device.engine;
+                toggled(c) => { ConfigState.can-toggled(root.dev, "engine", c); }
+            }
+            Button {
+                text: (root.device.expanded ? "▾ " : "▸ ") + root.device.signal-count + " signal(s)";
+                kind: ButtonKind.ghost;
+                clicked => { ConfigState.can-expand(root.dev); }
+            }
+            Button {
+                text: "remove";
+                kind: ButtonKind.ghost;
+                clicked => { ConfigState.can-remove(root.dev); }
+            }
+        }
+    }
+
+    if root.device.expanded: Indented {
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Button {
+                text: "Fixed";
+                selected: !root.device.muxed;
+                clicked => { ConfigState.set-muxed(root.dev, false); }
+            }
+            Button {
+                text: "Muxed";
+                selected: root.device.muxed;
+                clicked => { ConfigState.set-muxed(root.dev, true); }
+            }
+        }
+
+        if !root.device.muxed: VerticalLayout {
+            spacing: 4px;
+            alignment: start;
+            for sig[si] in root.device.signals: SignalEditor {
+                sig: sig;
+                dev: root.dev;
+                group: -1;
+                index: si;
+            }
+            HorizontalLayout {
+                alignment: start;
+                AddButton {
+                    text: "+ signal";
+                    clicked => { ConfigState.signal-add(root.dev, -1); }
+                }
+            }
+        }
+
+        if root.device.muxed: VerticalLayout {
+            spacing: 6px;
+            alignment: start;
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                FieldLabel { text: "discriminator byte"; }
+                Field {
+                    width: 50px;
+                    text: root.device.mux-byte;
+                    edited(t) => { ConfigState.mux-byte-edited(root.dev, t); }
+                }
+            }
+
+            for group[gi] in root.device.groups: Indented {
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    FieldLabel { text: "type_val"; }
+                    Field {
+                        width: 50px;
+                        text: group.type-val;
+                        edited(t) => { ConfigState.group-type-edited(root.dev, gi, t); }
+                    }
+                    Button {
+                        text: "remove group";
+                        kind: ButtonKind.ghost;
+                        clicked => { ConfigState.group-remove(root.dev, gi); }
+                    }
+                }
+                for sig[si] in group.signals: SignalEditor {
+                    sig: sig;
+                    dev: root.dev;
+                    group: gi;
+                    index: si;
+                }
+                HorizontalLayout {
+                    alignment: start;
+                    AddButton {
+                        text: "+ signal";
+                        clicked => { ConfigState.signal-add(root.dev, gi); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                AddButton {
+                    text: "+ group";
+                    clicked => { ConfigState.group-add(root.dev); }
+                }
+            }
+        }
+    }
+}
+
+component AdcChannelEditor inherits Panel {
+    in property <AdcChannel> channel;
+    in property <int> index;
+
+    HorizontalLayout {
+        padding: 4px;
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        alignment: start;
+        FieldLabel { text: "name"; }
+        Field {
+            width: 110px;
+            text: root.channel.name;
+            edited(t) => { ConfigState.adc-edited(root.index, "name", t); }
+        }
+        FieldLabel { text: "ch"; }
+        Field {
+            width: 40px;
+            text: root.channel.channel;
+            edited(t) => { ConfigState.adc-edited(root.index, "channel", t); }
+        }
+        FieldLabel { text: "scale"; }
+        Field {
+            width: 70px;
+            text: root.channel.scale;
+            edited(t) => { ConfigState.adc-edited(root.index, "scale", t); }
+        }
+        FieldLabel { text: "offset"; }
+        Field {
+            width: 70px;
+            text: root.channel.offset;
+            edited(t) => { ConfigState.adc-edited(root.index, "offset", t); }
+        }
+        Button {
+            text: "remove";
+            kind: ButtonKind.ghost;
+            clicked => { ConfigState.adc-remove(root.index); }
+        }
+    }
+}
+
+component SpecRow inherits VerticalLayout {
+    in property <string> field;
+    in property <string> desc;
+    spacing: 1px;
+    Label { text: root.field; color: Theme.accent; }
+    Label { text: root.desc; color: Theme.muted; wrap: word-wrap; overflow: clip; }
+}
+
+component HelpGroup inherits VerticalLayout {
+    in property <string> title;
+    spacing: 5px;
+    Label { text: root.title; }
+    @children
+}
+
+component Mono inherits Label {
+    color: Theme.muted;
+    overflow: clip;
+}
+
+// Static reference card: what each CAN field means, a byte-layout diagram,
+// and a matching JSON example.
+component CanHelpPanel inherits Rectangle {
+    background: Theme.panel;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    ScrollView {
+        VerticalLayout {
+            padding: 12px;
+            padding-top: 10px;
+            spacing: 14px;
+            alignment: start;
+
+            Label { text: "CAN config reference"; }
+
+            HelpGroup {
+                title: "device";
+                SpecRow { field: "id"; desc: "CAN arbitration id, hex (e.g. 0x100)"; }
+                SpecRow { field: "ext"; desc: "29-bit extended id vs 11-bit standard"; }
+                SpecRow { field: "fd"; desc: "CAN FD (up to 64B payload) vs classic CAN (8B)"; }
+            }
+
+            HelpGroup {
+                title: "signals: fixed";
+                Mono { text: "same byte layout decoded on every frame with this id"; wrap: word-wrap; }
+                VerticalLayout {
+                    Mono { text: "┌──┬──┬──┬──┬──┬──┬──┬──┐"; }
+                    Mono { text: "│00│01│02│03│04│05│06│07│"; }
+                    Mono { text: "└──┴──┴──┴──┴──┴──┴──┴──┘"; }
+                    Mono { text: "      └──┬──┘"; color: Theme.accent; }
+                    Mono { text: "    start=2, len=2"; color: Theme.accent; }
+                }
+            }
+
+            HelpGroup {
+                title: "signals: muxed";
+                Mono { text: "one byte (the discriminator) picks which signal group to decode"; wrap: word-wrap; }
+                SpecRow { field: "byte"; desc: "index of the discriminator byte"; }
+                SpecRow { field: "type_val"; desc: "discriminator value that selects this group"; }
+            }
+
+            HelpGroup {
+                title: "signal fields";
+                SpecRow { field: "name"; desc: "column name written to the log"; }
+                SpecRow { field: "start / len"; desc: "byte range read from the payload"; }
+                SpecRow { field: "signed"; desc: "treat raw bytes as two's complement"; }
+                SpecRow { field: "big-end"; desc: "MSB-first byte order (off = little-endian)"; }
+                SpecRow { field: "scale / offset"; desc: "value = scale × (raw − offset); blank scale logs raw bytes"; }
+            }
+
+            HelpGroup {
+                title: "example";
+                Rectangle {
+                    background: Theme.bg;
+                    border-radius: 3px;
+                    VerticalLayout {
+                        padding: 6px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        Mono { text: "{ \"id\": \"0x100\", \"fd\": false,"; }
+                        Mono { text: "  \"signals\": { \"Fixed\": ["; }
+                        Mono { text: "    { \"name\": \"rpm\","; }
+                        Mono { text: "      \"start\": 2, \"len\": 2,"; }
+                        Mono { text: "      \"scale\": 0.25 }"; }
+                        Mono { text: "  ]}}"; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ConfigurationPage {
+    VerticalLayout {
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: "refresh";
+                enabled: !ConfigState.busy;
+                clicked => { ConfigState.refresh(); }
+            }
+            Button {
+                text: "load file...";
+                enabled: !ConfigState.busy;
+                clicked => { ConfigState.load-file(); }
+            }
+            Button {
+                text: "save file...";
+                enabled: !ConfigState.busy;
+                clicked => { ConfigState.save-file(); }
+            }
+            Rectangle { }
+            HorizontalLayout {
+                spacing: 6px;
+                horizontal-stretch: 0;
+                if ConfigState.busy: VerticalLayout {
+                    alignment: center;
+                    Spinner { size: 12px; }
+                }
+                Label {
+                    text: ConfigState.status-text;
+                    color: Theme.tone(ConfigState.status-tone);
+                }
+            }
+            Rectangle { width: 4px; }
+            Button {
+                text: "push to device";
+                kind: ButtonKind.primary;
+                enabled: !ConfigState.busy;
+                clicked => { ConfigState.push(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+
+            if !ConfigState.show-form: EmptyState {
+                text: "no configuration loaded yet";
+                max-width: 640px;
+            }
+
+            if ConfigState.show-form: form := ScrollView {
+                max-width: 640px;
+                // Scroll sideways rather than squeeze the rows when narrow.
+                VerticalLayout {
+                    width: max(self.min-width, form.visible-width);
+                    alignment: start;
+                    spacing: 16px;
+                    padding-right: 12px;
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        SectionHeader {
+                            title: "CAN devices";
+                            action: "+ add device";
+                            action-clicked => { ConfigState.can-add(); }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            for device[di] in ConfigState.can-devices: CanDeviceEditor {
+                                device: device;
+                                dev: di;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        SectionHeader {
+                            title: "ADC channels";
+                            action: "+ add channel";
+                            action-clicked => { ConfigState.adc-add(); }
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            for channel[ci] in ConfigState.adc-channels: AdcChannelEditor {
+                                channel: channel;
+                                index: ci;
+                            }
+                        }
+                    }
+                }
+            }
+
+            CanHelpPanel {
+                width: clamp(parent.width * 0.4, 240px, 480px);
+            }
+        }
+    }
+}

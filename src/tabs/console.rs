@@ -1,21 +1,12 @@
-use gpui::{
-    AnyElement, Context, Hsla, IntoElement, ListSizingBehavior, Pixels, Task,
-    UniformListScrollHandle, div, prelude::*, px, uniform_list,
-};
-use gpui_component::label::Label;
-use gpui_component::scroll::ScrollableElement;
-use gpui_component::spinner::Spinner;
-use gpui_component::tab::TabBar;
-use gpui_component::{Sizable, h_flex, v_flex};
-use std::sync::Arc;
+use slint::ComponentHandle;
+use std::rc::Rc;
 use std::time::Duration;
 
+use crate::app::{self, App, model};
 use crate::console;
-use crate::root_view::RootView;
-use crate::theme;
+use crate::ui::{AppWindow, ConsoleLine, ConsoleState, Tone};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(350);
-const ROW_HEIGHT: Pixels = px(20.);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -41,20 +32,21 @@ impl Level {
         }
     }
 
-    fn color(self) -> Hsla {
+    fn tone(self) -> Tone {
         match self {
-            Level::Error => theme::red(),
-            Level::Warn => theme::amber(),
-            Level::Info => theme::fg(),
-            Level::Debug => theme::muted(),
+            Level::Error => Tone::Red,
+            Level::Warn => Tone::Amber,
+            Level::Info => Tone::Fg,
+            Level::Debug => Tone::Muted,
         }
     }
 }
 
-fn line_color(line: &str) -> Hsla {
-    Level::parse(line).map_or(theme::fg(), Level::color)
+fn line_tone(line: &str) -> Tone {
+    Level::parse(line).map_or(Tone::Fg, Level::tone)
 }
 
+/// Order matches the filter `TabBar` in `ui/tabs/console.slint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum LevelFilter {
     #[default]
@@ -73,16 +65,6 @@ impl LevelFilter {
         LevelFilter::Warn,
         LevelFilter::Error,
     ];
-
-    fn title(self) -> &'static str {
-        match self {
-            LevelFilter::All => "all",
-            LevelFilter::Debug => "debug",
-            LevelFilter::Info => "info",
-            LevelFilter::Warn => "warn",
-            LevelFilter::Error => "error",
-        }
-    }
 
     fn min_level(self) -> Option<Level> {
         match self {
@@ -103,51 +85,42 @@ impl LevelFilter {
     }
 }
 
+#[derive(Default)]
 pub struct ConsoleTab {
     connected_port: Option<String>,
-    lines: Arc<Vec<String>>,
-    last_line_count: usize,
+    lines: Vec<String>,
     filter: LevelFilter,
-    scroll_handle: UniformListScrollHandle,
-    task: Option<Task<()>>,
 }
 
-impl Default for ConsoleTab {
-    fn default() -> Self {
-        Self {
-            connected_port: None,
-            lines: Arc::new(Vec::new()),
-            last_line_count: 0,
-            filter: LevelFilter::default(),
-            scroll_handle: UniformListScrollHandle::default(),
-            task: None,
+pub fn wire(app: &Rc<App>, ui: &AppWindow) {
+    let app = app.clone();
+    ui.global::<ConsoleState>().on_set_filter(move |ix| {
+        if let Some(filter) = LevelFilter::ALL.get(ix as usize) {
+            app.console_tab.borrow_mut().filter = *filter;
+            app.render_console();
         }
-    }
+    });
 }
 
 impl ConsoleTab {
-    fn set_lines(&mut self, lines: Arc<Vec<String>>) {
-        self.lines = lines;
-    }
-
-    pub(crate) fn start(&mut self, cx: &mut Context<RootView>) {
-        if self.task.is_some() {
-            return;
-        }
-        self.task = Some(cx.spawn(async move |weak, cx| {
+    /// Scans for the ESP32's USB-JTAG console port forever, streaming its
+    /// output while connected.
+    pub(crate) fn start(app: &Rc<App>) {
+        let app = app.clone();
+        app::spawn(async move {
             loop {
                 let port_name = loop {
                     if let Some(name) = console::find_port() {
                         break name;
                     }
-                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    app::sleep(Duration::from_secs(1)).await;
                 };
 
                 let port = match console::open(&port_name) {
                     Ok(port) => port,
                     Err(e) => {
                         log::warn!("console: failed to open {port_name}: {e}");
-                        cx.background_executor().timer(Duration::from_secs(1)).await;
+                        app::sleep(Duration::from_secs(1)).await;
                         continue;
                     }
                 };
@@ -155,21 +128,16 @@ impl ConsoleTab {
                 let shared = console::Lines::default();
                 let handle = console::spawn_reader(port, shared.clone());
 
-                let alive = weak
-                    .update(cx, |view, cx| {
-                        view.console_tab.connected_port = Some(port_name.clone());
-                        view.console_tab.lines = Arc::new(Vec::new());
-                        view.console_tab.last_line_count = 0;
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !alive {
-                    return;
+                {
+                    let mut tab = app.console_tab.borrow_mut();
+                    tab.connected_port = Some(port_name);
+                    tab.lines.clear();
                 }
+                app.render_console();
 
                 let mut last_seen_len = 0usize;
                 loop {
-                    cx.background_executor().timer(POLL_INTERVAL).await;
+                    app::sleep(POLL_INTERVAL).await;
                     if handle.is_finished() {
                         break;
                     }
@@ -178,153 +146,37 @@ impl ConsoleTab {
                         continue;
                     }
                     last_seen_len = len;
-                    let snapshot: Arc<Vec<String>> = Arc::new(shared.snapshot().into());
-                    let alive = weak
-                        .update(cx, |view, cx| {
-                            view.console_tab.set_lines(snapshot);
-                            cx.notify();
-                        })
-                        .is_ok();
-                    if !alive {
-                        return;
-                    }
+                    app.console_tab.borrow_mut().lines = shared.snapshot().into();
+                    app.render_console();
                 }
 
                 // Reader exited: device unplugged or port closed. Report
                 // disconnected and loop back to scanning.
-                let alive = weak
-                    .update(cx, |view, cx| {
-                        view.console_tab.connected_port = None;
-                        cx.notify();
-                    })
-                    .is_ok();
-                if !alive {
-                    return;
-                }
+                app.console_tab.borrow_mut().connected_port = None;
+                app.render_console();
             }
-        }));
+        });
     }
 
-    pub fn render(&mut self, cx: &mut Context<RootView>) -> AnyElement {
-        match self.connected_port.clone() {
-            Some(port) => self.log_view(port, cx),
-            None => self.waiting_view(),
-        }
-    }
-
-    fn filter_bar(&self, cx: &mut Context<RootView>) -> impl IntoElement {
-        let weak = cx.weak_entity();
-        let selected_index = LevelFilter::ALL
+    pub fn render(&self, ui: &AppWindow) {
+        let lines: Vec<ConsoleLine> = self
+            .lines
             .iter()
-            .position(|f| *f == self.filter)
-            .unwrap_or(0);
-        TabBar::new("console-level-filter")
-            .underline()
-            .small()
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .selected_index(selected_index)
-            .children(LevelFilter::ALL.map(|f| f.title()))
-            .on_click(move |ix, _window, app| {
-                let filter = LevelFilter::ALL[*ix];
-                weak.update(app, |root, cx| {
-                    root.console_tab.filter = filter;
-                    cx.notify();
-                })
-                .ok();
+            .filter(|line| self.filter.matches(line))
+            .map(|line| ConsoleLine {
+                text: line.into(),
+                tone: line_tone(line),
             })
-    }
+            .collect();
 
-    fn waiting_view(&self) -> AnyElement {
-        v_flex()
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap(px(8.))
-            .child(Spinner::new().small())
-            .child(Label::new("waiting for device...").text_color(theme::muted()))
-            .into_any_element()
-    }
-
-    fn log_view(&mut self, port: String, cx: &mut Context<RootView>) -> AnyElement {
-        let filter = self.filter;
-        let lines = self.lines.clone();
-        let visible: Arc<Vec<usize>> = Arc::new(
-            (0..lines.len())
-                .filter(|&ix| filter.matches(&lines[ix]))
-                .collect(),
+        let s = ui.global::<ConsoleState>();
+        s.set_port(self.connected_port.clone().unwrap_or_default().into());
+        s.set_lines(model(lines));
+        s.set_filter(
+            LevelFilter::ALL
+                .iter()
+                .position(|f| *f == self.filter)
+                .unwrap_or(0) as i32,
         );
-
-        let count = visible.len();
-        let grew = count > self.last_line_count;
-        self.last_line_count = count;
-
-        if grew && is_near_bottom(&self.scroll_handle) {
-            scroll_to_bottom(&self.scroll_handle);
-        }
-
-        let scroll_handle = self.scroll_handle.clone();
-
-        v_flex()
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .size_full()
-            .gap(px(8.))
-            .child(
-                h_flex()
-                    .gap(px(6.))
-                    .child(div().text_color(theme::green()).child("●"))
-                    .child(Label::new(format!("connected: {port}")).text_color(theme::muted())),
-            )
-            .child(self.filter_bar(cx))
-            .child(
-                div()
-                    .id("console-log")
-                    .relative()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme::border())
-                    .vertical_scrollbar(&self.scroll_handle)
-                    .child(
-                        uniform_list("console-lines", count, move |range, _window, _cx| {
-                            range
-                                .map(|ix| {
-                                    let line = &lines[visible[ix]];
-                                    div()
-                                        .h(ROW_HEIGHT)
-                                        .px(px(8.))
-                                        .flex()
-                                        .items_center()
-                                        .overflow_hidden()
-                                        .child(
-                                            Label::new(line.clone())
-                                                .text_color(line_color(line))
-                                                .whitespace_nowrap(),
-                                        )
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                        .size_full()
-                        .with_sizing_behavior(ListSizingBehavior::Auto)
-                        .track_scroll(scroll_handle)
-                        .into_any_element(),
-                    ),
-            )
-            .into_any_element()
     }
-}
-
-fn is_near_bottom(handle: &UniformListScrollHandle) -> bool {
-    let state = handle.0.borrow();
-    let offset = state.base_handle.offset();
-    let max_offset = state.base_handle.max_offset();
-    (max_offset.height + offset.y) <= px(4.)
-}
-
-fn scroll_to_bottom(handle: &UniformListScrollHandle) {
-    handle.0.borrow().base_handle.scroll_to_bottom();
 }

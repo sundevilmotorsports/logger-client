@@ -1,0 +1,77 @@
+import { ListView } from "std-widgets.slint";
+import { Theme, Tone } from "../theme.slint";
+import { Dot, EmptyState, Label, TabBar } from "../widgets.slint";
+
+export struct ConsoleLine {
+    text: string,
+    tone: Tone,
+}
+
+export global ConsoleState {
+    in property <string> port;
+    in property <[ConsoleLine]> lines;
+    in property <int> filter;
+    callback set-filter(index: int);
+}
+
+export component ConsolePage {
+    if ConsoleState.port == "": EmptyState {
+        text: "waiting for device...";
+        spinner: true;
+    }
+
+    if ConsoleState.port != "": VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            Dot { color: Theme.green; }
+            Label { text: "connected: " + ConsoleState.port; color: Theme.muted; }
+        }
+
+        TabBar {
+            tabs: ["all", "debug", "info", "warn", "error"];
+            current: ConsoleState.filter;
+            select(i) => { ConsoleState.set-filter(i); }
+        }
+
+        Rectangle {
+            border-radius: Theme.radius;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+
+            list := ListView {
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+
+                // Follow new output only while scrolled to the bottom, so
+                // reading older lines isn't interrupted.
+                property <bool> follow: true;
+                changed content-y => {
+                    self.follow = self.content-y <= self.visible-height - self.content-height + 4px;
+                }
+                changed content-height => {
+                    if self.follow {
+                        self.content-y = min(0px, self.visible-height - self.content-height);
+                    }
+                }
+
+                for line in ConsoleState.lines: Rectangle {
+                    height: 20px;
+                    Text {
+                        x: 8px;
+                        text: line.text;
+                        color: Theme.tone(line.tone);
+                        font-size: Theme.font-size;
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                    }
+                }
+            }
+        }
+    }
+}

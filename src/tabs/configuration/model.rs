@@ -1,163 +1,174 @@
-use gpui::{App, AppContext as _, Context, Entity, Window};
-use gpui_component::input::InputState;
+use crate::app::model;
+use crate::ui::{AdcChannel, CanDevice, Signal, SignalGroup};
 
-use crate::root_view::RootView;
-
+#[derive(Default)]
 pub(super) struct CanDeviceForm {
-    pub(super) id: Entity<InputState>,
+    pub(super) id: String,
     pub(super) extended: bool,
     pub(super) fd: bool,
     pub(super) engine: bool,
     pub(super) signals: SignalsForm,
     pub(super) expanded: bool,
-    /// Signal count, captured at load time since `signals` starts as an
-    /// empty placeholder until materialized; see `raw_signals` below.
-    pub(super) signal_count: usize,
-    /// The `"signals"` JSON this device was loaded with, kept around so
-    /// `signals` can be materialized lazily (only when the device is first
-    /// expanded) instead of eagerly creating an `InputState` entity per
-    /// field of every signal of every device on load -- with dozens of CAN
-    /// devices that was hundreds of entities created synchronously, slow
-    /// enough to look like a freeze. `None` once materialized (or for a
-    /// freshly-added device, which has nothing to lazily load).
-    pub(super) raw_signals: Option<serde_json::Value>,
 }
 
 impl CanDeviceForm {
-    pub(super) fn new(window: &mut Window, cx: &mut Context<RootView>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            id: cx.new(|cx| InputState::new(window, cx).default_value("0")),
-            extended: false,
-            fd: false,
-            engine: false,
-            signals: SignalsForm::Fixed(Vec::new()),
-            expanded: false,
-            signal_count: 0,
-            raw_signals: None,
+            id: "0".to_string(),
+            ..Default::default()
         }
     }
 
-    /// Materializes `signals` from `raw_signals` if it hasn't been already.
-    /// Call before showing or serializing this device's signal editor.
-    pub(super) fn ensure_materialized(&mut self, window: &mut Window, cx: &mut Context<RootView>) {
-        if let Some(raw) = self.raw_signals.take() {
-            self.signals = signals_from_json(&raw, window, cx);
+    pub(super) fn signal_count(&self) -> usize {
+        match &self.signals {
+            SignalsForm::Fixed(sigs) => sigs.len(),
+            SignalsForm::Muxed { groups, .. } => groups.iter().map(|g| g.signals.len()).sum(),
         }
     }
 
-    /// Signal count for display: the load-time snapshot before
-    /// materialization (cheap, no need to touch `signals`), the live count
-    /// after (so it tracks +/- signal edits once the editor's open).
-    pub(super) fn display_signal_count(&self) -> usize {
-        if self.raw_signals.is_some() {
-            self.signal_count
-        } else {
-            match &self.signals {
-                SignalsForm::Fixed(sigs) => sigs.len(),
-                SignalsForm::Muxed { groups, .. } => groups.iter().map(|g| g.signals.len()).sum(),
+    pub(super) fn to_ui(&self) -> CanDevice {
+        let (muxed, mux_byte, signals, groups) = match &self.signals {
+            SignalsForm::Fixed(sigs) => (false, "", signals_model(sigs), model(Vec::new())),
+            SignalsForm::Muxed { byte, groups } => (
+                true,
+                byte.as_str(),
+                model(Vec::new()),
+                model(
+                    groups
+                        .iter()
+                        .map(|g| SignalGroup {
+                            type_val: g.type_val.as_str().into(),
+                            signals: signals_model(&g.signals),
+                        })
+                        .collect(),
+                ),
+            ),
+        };
+        CanDevice {
+            id: self.id.as_str().into(),
+            extended: self.extended,
+            fd: self.fd,
+            engine: self.engine,
+            expanded: self.expanded,
+            signal_count: self.signal_count() as i32,
+            muxed,
+            mux_byte: mux_byte.into(),
+            signals,
+            groups,
+        }
+    }
+
+    /// The signal list at `group` (`None` for fixed signals), if the device
+    /// is in the matching mode.
+    pub(super) fn signal_list_mut(&mut self, group: Option<usize>) -> Option<&mut Vec<SignalForm>> {
+        match (&mut self.signals, group) {
+            (SignalsForm::Fixed(sigs), None) => Some(sigs),
+            (SignalsForm::Muxed { groups, .. }, Some(gi)) => {
+                groups.get_mut(gi).map(|g| &mut g.signals)
             }
+            _ => None,
         }
     }
+}
+
+fn signals_model(sigs: &[SignalForm]) -> slint::ModelRc<Signal> {
+    model(sigs.iter().map(SignalForm::to_ui).collect())
 }
 
 pub(super) struct SignalForm {
-    pub(super) name: Entity<InputState>,
-    pub(super) start: Entity<InputState>,
-    pub(super) len: Entity<InputState>,
+    pub(super) name: String,
+    pub(super) start: String,
+    pub(super) len: String,
     pub(super) signed: bool,
     pub(super) big_endian: bool,
     /// Empty means "no scale" (raw bytes logged), matching `Signal::scale: Option<f32>`.
-    pub(super) scale: Entity<InputState>,
-    pub(super) offset: Entity<InputState>,
+    pub(super) scale: String,
+    pub(super) offset: String,
 }
 
 impl SignalForm {
-    pub(super) fn new(window: &mut Window, cx: &mut Context<RootView>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            name: cx.new(|cx| InputState::new(window, cx)),
-            start: cx.new(|cx| InputState::new(window, cx).default_value("0")),
-            len: cx.new(|cx| InputState::new(window, cx).default_value("1")),
+            name: String::new(),
+            start: "0".to_string(),
+            len: "1".to_string(),
             signed: false,
             big_endian: false,
-            scale: cx.new(|cx| InputState::new(window, cx)),
-            offset: cx.new(|cx| InputState::new(window, cx)),
+            scale: String::new(),
+            offset: String::new(),
         }
     }
 
-    fn from_json(v: &serde_json::Value, window: &mut Window, cx: &mut Context<RootView>) -> Self {
-        let name = v
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let start = v
-            .get("start")
-            .and_then(|v| v.as_u64())
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "0".to_string());
-        let len = v
-            .get("len")
-            .and_then(|v| v.as_u64())
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "1".to_string());
-        let scale = v
-            .get("scale")
-            .and_then(|v| v.as_f64())
-            .map(|n| (n as f32).to_string())
-            .unwrap_or_default();
-        let offset = v
-            .get("offset")
-            .and_then(|v| v.as_f64())
-            .map(|n| (n as f32).to_string())
-            .unwrap_or_default();
+    fn from_json(v: &serde_json::Value) -> Self {
         Self {
-            name: cx.new(|cx| InputState::new(window, cx).default_value(name)),
-            start: cx.new(|cx| InputState::new(window, cx).default_value(start)),
-            len: cx.new(|cx| InputState::new(window, cx).default_value(len)),
+            name: v
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            start: v
+                .get("start")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            len: v
+                .get("len")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "1".to_string()),
             signed: v.get("signed").and_then(|v| v.as_bool()).unwrap_or(false),
             big_endian: v
                 .get("big_endian")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
-            scale: cx.new(|cx| InputState::new(window, cx).default_value(scale)),
-            offset: cx.new(|cx| InputState::new(window, cx).default_value(offset)),
+            scale: float_text(v.get("scale")),
+            offset: float_text(v.get("offset")),
         }
     }
 
-    fn to_json(&self, cx: &App, label: &str) -> anyhow::Result<serde_json::Value> {
-        let name = self.name.read(cx).value().to_string();
-        let start_text = self.start.read(cx).value().to_string();
-        let start: usize = start_text
+    fn to_ui(&self) -> Signal {
+        Signal {
+            name: self.name.as_str().into(),
+            start: self.start.as_str().into(),
+            len: self.len.as_str().into(),
+            signed: self.signed,
+            big_endian: self.big_endian,
+            scale: self.scale.as_str().into(),
+            offset: self.offset.as_str().into(),
+        }
+    }
+
+    fn to_json(&self, label: &str) -> anyhow::Result<serde_json::Value> {
+        let start: usize = self
+            .start
             .trim()
             .parse()
-            .map_err(|_| anyhow::anyhow!("{label}: invalid start \"{start_text}\""))?;
-        let len_text = self.len.read(cx).value().to_string();
-        let len: usize = len_text
+            .map_err(|_| anyhow::anyhow!("{label}: invalid start \"{}\"", self.start))?;
+        let len: usize = self
+            .len
             .trim()
             .parse()
-            .map_err(|_| anyhow::anyhow!("{label}: invalid len \"{len_text}\""))?;
-        let scale_text = self.scale.read(cx).value().to_string();
-        let scale = if scale_text.trim().is_empty() {
+            .map_err(|_| anyhow::anyhow!("{label}: invalid len \"{}\"", self.len))?;
+        let scale = if self.scale.trim().is_empty() {
             None
         } else {
             Some(
-                scale_text
+                self.scale
                     .trim()
                     .parse::<f32>()
-                    .map_err(|_| anyhow::anyhow!("{label}: invalid scale \"{scale_text}\""))?,
+                    .map_err(|_| anyhow::anyhow!("{label}: invalid scale \"{}\"", self.scale))?,
             )
         };
-        let offset_text = self.offset.read(cx).value().to_string();
-        let offset: f32 = if offset_text.trim().is_empty() {
+        let offset: f32 = if self.offset.trim().is_empty() {
             0.0
         } else {
-            offset_text
+            self.offset
                 .trim()
                 .parse()
-                .map_err(|_| anyhow::anyhow!("{label}: invalid offset \"{offset_text}\""))?
+                .map_err(|_| anyhow::anyhow!("{label}: invalid offset \"{}\"", self.offset))?
         };
         Ok(serde_json::json!({
-            "name": name,
+            "name": self.name,
             "start": start,
             "len": len,
             "signed": self.signed,
@@ -169,51 +180,56 @@ impl SignalForm {
 }
 
 pub(super) struct SignalGroupForm {
-    pub(super) type_val: Entity<InputState>,
+    pub(super) type_val: String,
     pub(super) signals: Vec<SignalForm>,
 }
 
 pub(super) enum SignalsForm {
     Fixed(Vec<SignalForm>),
     Muxed {
-        byte: Entity<InputState>,
+        byte: String,
         groups: Vec<SignalGroupForm>,
     },
 }
 
+impl Default for SignalsForm {
+    fn default() -> Self {
+        SignalsForm::Fixed(Vec::new())
+    }
+}
+
 impl SignalsForm {
-    pub(super) fn empty_muxed(window: &mut Window, cx: &mut Context<RootView>) -> Self {
+    pub(super) fn empty_muxed() -> Self {
         SignalsForm::Muxed {
-            byte: cx.new(|cx| InputState::new(window, cx).default_value("0")),
+            byte: "0".to_string(),
             groups: Vec::new(),
         }
     }
 
-    fn to_json(&self, cx: &App, label: &str) -> anyhow::Result<serde_json::Value> {
+    fn to_json(&self, label: &str) -> anyhow::Result<serde_json::Value> {
         match self {
             SignalsForm::Fixed(sigs) => {
                 let sigs = sigs
                     .iter()
                     .enumerate()
-                    .map(|(i, s)| s.to_json(cx, &format!("{label} signal {}", i + 1)))
+                    .map(|(i, s)| s.to_json(&format!("{label} signal {}", i + 1)))
                     .collect::<anyhow::Result<Vec<_>>>()?;
                 Ok(serde_json::json!({ "Fixed": sigs }))
             }
             SignalsForm::Muxed { byte, groups } => {
-                let byte_text = byte.read(cx).value().to_string();
-                let byte_val: usize = byte_text
+                let byte_val: usize = byte
                     .trim()
                     .parse()
-                    .map_err(|_| anyhow::anyhow!("{label}: invalid mux byte \"{byte_text}\""))?;
+                    .map_err(|_| anyhow::anyhow!("{label}: invalid mux byte \"{byte}\""))?;
                 let groups = groups
                     .iter()
                     .enumerate()
                     .map(|(gi, g)| {
-                        let type_text = g.type_val.read(cx).value().to_string();
-                        let type_val: u8 = type_text.trim().parse().map_err(|_| {
+                        let type_val: u8 = g.type_val.trim().parse().map_err(|_| {
                             anyhow::anyhow!(
-                                "{label} group {}: invalid type_val \"{type_text}\"",
-                                gi + 1
+                                "{label} group {}: invalid type_val \"{}\"",
+                                gi + 1,
+                                g.type_val
                             )
                         })?;
                         let signals = g
@@ -221,7 +237,7 @@ impl SignalsForm {
                             .iter()
                             .enumerate()
                             .map(|(i, s)| {
-                                s.to_json(cx, &format!("{label} group {} signal {}", gi + 1, i + 1))
+                                s.to_json(&format!("{label} group {} signal {}", gi + 1, i + 1))
                             })
                             .collect::<anyhow::Result<Vec<_>>>()?;
                         Ok(serde_json::json!({ "type_val": type_val, "signals": signals }))
@@ -233,17 +249,9 @@ impl SignalsForm {
     }
 }
 
-pub(super) fn signals_from_json(
-    v: &serde_json::Value,
-    window: &mut Window,
-    cx: &mut Context<RootView>,
-) -> SignalsForm {
+fn signals_from_json(v: &serde_json::Value) -> SignalsForm {
     if let Some(arr) = v.get("Fixed").and_then(|v| v.as_array()) {
-        return SignalsForm::Fixed(
-            arr.iter()
-                .map(|s| SignalForm::from_json(s, window, cx))
-                .collect(),
-        );
+        return SignalsForm::Fixed(arr.iter().map(SignalForm::from_json).collect());
     }
     if let Some(m) = v.get("Muxed") {
         let byte = m
@@ -256,75 +264,57 @@ pub(super) fn signals_from_json(
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .map(|g| {
-                        let type_val = g
+                    .map(|g| SignalGroupForm {
+                        type_val: g
                             .get("type_val")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0)
-                            .to_string();
-                        let signals = g
+                            .to_string(),
+                        signals: g
                             .get("signals")
                             .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .map(|s| SignalForm::from_json(s, window, cx))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        SignalGroupForm {
-                            type_val: cx
-                                .new(|cx| InputState::new(window, cx).default_value(type_val)),
-                            signals,
-                        }
+                            .map(|arr| arr.iter().map(SignalForm::from_json).collect())
+                            .unwrap_or_default(),
                     })
                     .collect()
             })
             .unwrap_or_default();
-        return SignalsForm::Muxed {
-            byte: cx.new(|cx| InputState::new(window, cx).default_value(byte)),
-            groups,
-        };
+        return SignalsForm::Muxed { byte, groups };
     }
-    SignalsForm::Fixed(Vec::new())
+    SignalsForm::default()
 }
 
+#[derive(Default)]
 pub(super) struct AdcChannelForm {
-    pub(super) name: Entity<InputState>,
-    pub(super) channel: Entity<InputState>,
+    pub(super) name: String,
+    pub(super) channel: String,
     /// Empty means "no scale" (raw counts logged), matching `AdcChannel::scale: Option<f32>`.
-    pub(super) scale: Entity<InputState>,
-    pub(super) offset: Entity<InputState>,
+    pub(super) scale: String,
+    pub(super) offset: String,
 }
 
 impl AdcChannelForm {
-    pub(super) fn new(window: &mut Window, cx: &mut Context<RootView>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            name: cx.new(|cx| InputState::new(window, cx)),
-            channel: cx.new(|cx| InputState::new(window, cx).default_value("0")),
-            scale: cx.new(|cx| InputState::new(window, cx)),
-            offset: cx.new(|cx| InputState::new(window, cx)),
+            channel: "0".to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn to_ui(&self) -> AdcChannel {
+        AdcChannel {
+            name: self.name.as_str().into(),
+            channel: self.channel.as_str().into(),
+            scale: self.scale.as_str().into(),
+            offset: self.offset.as_str().into(),
         }
     }
 }
 
-/// Counts signals in the raw `"signals"` JSON -- works without
-/// materializing (see `CanDeviceForm::raw_signals`).
-fn signal_count_in_json(v: &serde_json::Value) -> usize {
-    if let Some(arr) = v.get("Fixed").and_then(|v| v.as_array()) {
-        return arr.len();
-    }
-    if let Some(groups) = v
-        .get("Muxed")
-        .and_then(|m| m.get("groups"))
-        .and_then(|v| v.as_array())
-    {
-        return groups
-            .iter()
-            .filter_map(|g| g.get("signals").and_then(|v| v.as_array()))
-            .map(|s| s.len())
-            .sum();
-    }
-    0
+fn float_text(v: Option<&serde_json::Value>) -> String {
+    v.and_then(|v| v.as_f64())
+        .map(|n| (n as f32).to_string())
+        .unwrap_or_default()
 }
 
 fn parse_can_id(s: &str) -> Option<u32> {
@@ -335,77 +325,46 @@ fn parse_can_id(s: &str) -> Option<u32> {
     }
 }
 
-pub(super) fn can_devices_from_json(
-    v: &serde_json::Value,
-    window: &mut Window,
-    cx: &mut Context<RootView>,
-) -> Vec<CanDeviceForm> {
+pub(super) fn can_devices_from_json(v: &serde_json::Value) -> Vec<CanDeviceForm> {
     v.get("can_devices")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|d| {
-                    let id_text = d
+                .map(|d| CanDeviceForm {
+                    id: d
                         .get("id")
                         .and_then(|v| v.as_u64())
                         .map(|n| format!("0x{n:X}"))
-                        .unwrap_or_default();
-                    let raw_signals = d.get("signals").cloned();
-                    let signal_count = raw_signals.as_ref().map(signal_count_in_json).unwrap_or(0);
-                    CanDeviceForm {
-                        id: cx.new(|cx| InputState::new(window, cx).default_value(id_text)),
-                        extended: d.get("extended").and_then(|v| v.as_bool()).unwrap_or(false),
-                        fd: d.get("fd").and_then(|v| v.as_bool()).unwrap_or(false),
-                        engine: d.get("bus").and_then(|v| v.as_str()) == Some("Engine"),
-                        // Not materialized yet -- ensure_materialized() does
-                        // that lazily, on first expand.
-                        signals: SignalsForm::Fixed(Vec::new()),
-                        expanded: false,
-                        signal_count,
-                        raw_signals,
-                    }
+                        .unwrap_or_default(),
+                    extended: d.get("extended").and_then(|v| v.as_bool()).unwrap_or(false),
+                    fd: d.get("fd").and_then(|v| v.as_bool()).unwrap_or(false),
+                    engine: d.get("bus").and_then(|v| v.as_str()) == Some("Engine"),
+                    signals: d.get("signals").map(signals_from_json).unwrap_or_default(),
+                    expanded: false,
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-pub(super) fn adc_channels_from_json(
-    v: &serde_json::Value,
-    window: &mut Window,
-    cx: &mut Context<RootView>,
-) -> Vec<AdcChannelForm> {
+pub(super) fn adc_channels_from_json(v: &serde_json::Value) -> Vec<AdcChannelForm> {
     v.get("adc_channels")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|c| {
-                    let name = c
+                .map(|c| AdcChannelForm {
+                    name: c
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
-                        .to_string();
-                    let channel = c
+                        .to_string(),
+                    channel: c
                         .get("channel")
                         .and_then(|v| v.as_u64())
                         .map(|n| n.to_string())
-                        .unwrap_or_default();
-                    let scale = c
-                        .get("scale")
-                        .and_then(|v| v.as_f64())
-                        .map(|n| (n as f32).to_string())
-                        .unwrap_or_default();
-                    let offset = c
-                        .get("offset")
-                        .and_then(|v| v.as_f64())
-                        .map(|n| (n as f32).to_string())
-                        .unwrap_or_default();
-                    AdcChannelForm {
-                        name: cx.new(|cx| InputState::new(window, cx).default_value(name)),
-                        channel: cx.new(|cx| InputState::new(window, cx).default_value(channel)),
-                        scale: cx.new(|cx| InputState::new(window, cx).default_value(scale)),
-                        offset: cx.new(|cx| InputState::new(window, cx).default_value(offset)),
-                    }
+                        .unwrap_or_default(),
+                    scale: float_text(c.get("scale")),
+                    offset: float_text(c.get("offset")),
                 })
                 .collect()
         })
@@ -413,21 +372,12 @@ pub(super) fn adc_channels_from_json(
 }
 
 /// Validates and serializes the current form state into JSON
-pub(super) fn build_config_json(
-    tab: &super::ConfigurationTab,
-    cx: &App,
-) -> anyhow::Result<serde_json::Value> {
+pub(super) fn build_config_json(tab: &super::ConfigurationTab) -> anyhow::Result<serde_json::Value> {
     let mut can_devices = Vec::with_capacity(tab.can_devices.len());
     for (i, d) in tab.can_devices.iter().enumerate() {
-        let id_text = d.id.read(cx).value().to_string();
-        let id = parse_can_id(&id_text)
-            .ok_or_else(|| anyhow::anyhow!("CAN device {}: invalid id \"{id_text}\"", i + 1))?;
-        // Never expanded/edited: pass the original JSON straight through
-        // instead of serializing the empty placeholder form.
-        let signals = match &d.raw_signals {
-            Some(raw) => raw.clone(),
-            None => d.signals.to_json(cx, &format!("CAN device {}", i + 1))?,
-        };
+        let id = parse_can_id(&d.id)
+            .ok_or_else(|| anyhow::anyhow!("CAN device {}: invalid id \"{}\"", i + 1, d.id))?;
+        let signals = d.signals.to_json(&format!("CAN device {}", i + 1))?;
         can_devices.push(serde_json::json!({
             "id": id,
             "extended": d.extended,
@@ -439,29 +389,25 @@ pub(super) fn build_config_json(
 
     let mut adc_channels = Vec::with_capacity(tab.adc_channels.len());
     for (i, c) in tab.adc_channels.iter().enumerate() {
-        let name = c.name.read(cx).value().to_string();
-        let channel_text = c.channel.read(cx).value().to_string();
-        let channel: u8 = channel_text.trim().parse().map_err(|_| {
-            anyhow::anyhow!("ADC channel {}: invalid channel \"{channel_text}\"", i + 1)
+        let channel: u8 = c.channel.trim().parse().map_err(|_| {
+            anyhow::anyhow!("ADC channel {}: invalid channel \"{}\"", i + 1, c.channel)
         })?;
-        let scale_text = c.scale.read(cx).value().to_string();
-        let scale = if scale_text.trim().is_empty() {
+        let scale = if c.scale.trim().is_empty() {
             None
         } else {
-            Some(scale_text.trim().parse::<f32>().map_err(|_| {
-                anyhow::anyhow!("ADC channel {}: invalid scale \"{scale_text}\"", i + 1)
+            Some(c.scale.trim().parse::<f32>().map_err(|_| {
+                anyhow::anyhow!("ADC channel {}: invalid scale \"{}\"", i + 1, c.scale)
             })?)
         };
-        let offset_text = c.offset.read(cx).value().to_string();
-        let offset: f32 = if offset_text.trim().is_empty() {
+        let offset: f32 = if c.offset.trim().is_empty() {
             0.0
         } else {
-            offset_text.trim().parse().map_err(|_| {
-                anyhow::anyhow!("ADC channel {}: invalid offset \"{offset_text}\"", i + 1)
+            c.offset.trim().parse().map_err(|_| {
+                anyhow::anyhow!("ADC channel {}: invalid offset \"{}\"", i + 1, c.offset)
             })?
         };
         adc_channels.push(serde_json::json!({
-            "name": name,
+            "name": c.name,
             "channel": channel,
             "scale": scale,
             "offset": offset,
