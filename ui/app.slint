@@ -74,25 +74,14 @@ export component AppWindow inherits Window {
     default-font-size: Theme.font-size;
     forward-focus: keys;
 
-    MenuBar {
-        Menu {
-            title: "File";
-            MenuItem {
-                title: "Parse Log File...";
-                shortcut: @keys(Control + O);
-                activated => { AppState.parse-log-file(); }
-            }
-            MenuItem {
-                title: "Parse Log Folder...";
-                activated => { AppState.parse-log-folder(); }
-            }
-        }
-    }
-
     keys := FocusScope {
         // Bare "q" quits, but only when nothing else (e.g. a text field)
         // took the key first.
         key-pressed(event) => {
+            if event.text == "o" && event.modifiers.control {
+                AppState.parse-log-file();
+                return accept;
+            }
             if event.text == "q" && !event.modifiers.control && !event.modifiers.meta && !event.modifiers.alt {
                 AppState.quit();
                 return accept;
@@ -153,6 +142,22 @@ export component AppWindow inherits Window {
                     Label {
                         text: AppState.connected ? "connected" : "disconnected";
                         color: Theme.muted;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "parse file";
+                        clicked => { AppState.parse-log-file(); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "parse folder";
+                        clicked => { AppState.parse-log-folder(); }
                     }
                 }
 

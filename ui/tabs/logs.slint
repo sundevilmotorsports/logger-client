@@ -9,6 +9,7 @@ export struct LogRow {
     current: bool,
     busy: bool,
     progress: float,
+    phase: string,
 }
 
 export global LogsState {
@@ -86,7 +87,14 @@ export component LogsPage {
                     if row.busy: HorizontalLayout {
                         padding-left: 12px;
                         padding-right: 12px;
-                        ProgressBar { value: row.progress; }
+                        spacing: 8px;
+                        height: 16px;
+                        Label { text: row.phase; color: Theme.muted; }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            ProgressBar { value: row.progress; }
+                        }
                     }
                 }
             }

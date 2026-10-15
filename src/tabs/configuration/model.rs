@@ -372,7 +372,9 @@ pub(super) fn adc_channels_from_json(v: &serde_json::Value) -> Vec<AdcChannelFor
 }
 
 /// Validates and serializes the current form state into JSON
-pub(super) fn build_config_json(tab: &super::ConfigurationTab) -> anyhow::Result<serde_json::Value> {
+pub(super) fn build_config_json(
+    tab: &super::ConfigurationTab,
+) -> anyhow::Result<serde_json::Value> {
     let mut can_devices = Vec::with_capacity(tab.can_devices.len());
     for (i, d) in tab.can_devices.iter().enumerate() {
         let id = parse_can_id(&d.id)

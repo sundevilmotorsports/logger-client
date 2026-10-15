@@ -17,8 +17,19 @@ pub struct LogsTab {
 
 struct Busy {
     name: String,
-    downloaded: u64,
+    phase: &'static str,
+    done: u64,
     total: u64,
+}
+
+impl Busy {
+    fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            1.
+        } else {
+            (self.done as f32 / self.total as f32).min(1.)
+        }
+    }
 }
 
 pub fn wire(app: &Rc<App>, ui: &AppWindow) {
@@ -30,17 +41,16 @@ pub fn wire(app: &Rc<App>, ui: &AppWindow) {
         let a = a.clone();
         app::spawn(async move {
             let label = if resume { "resume" } else { "pause" };
-            app::run_command_toast(&a, device::Command::SetLogging { active: resume }, label)
-                .await
+            app::run_command_toast(&a, device::Command::SetLogging { active: resume }, label).await
         });
     });
 
     let a = app.clone();
     s.on_new_log(move || {
         let a = a.clone();
-        app::spawn(async move {
-            app::run_command_toast(&a, device::Command::NextLog, "new log").await
-        });
+        app::spawn(
+            async move { app::run_command_toast(&a, device::Command::NextLog, "new log").await },
+        );
     });
 
     let a = app.clone();
@@ -56,7 +66,8 @@ pub fn wire(app: &Rc<App>, ui: &AppWindow) {
             let (name, total) = (entry.name.clone(), entry.size);
             tab.busy = Some(Busy {
                 name: name.clone(),
-                downloaded: 0,
+                phase: "downloading",
+                done: 0,
                 total,
             });
             tab.last_result = None;
@@ -90,15 +101,11 @@ impl LogsTab {
                     current: state.current_log.as_deref() == Some(entry.name.as_str())
                         && state.logging_active == Some(true),
                     busy: busy.is_some(),
-                    progress: busy
-                        .map(|b| {
-                            if b.total == 0 {
-                                1.
-                            } else {
-                                b.downloaded as f32 / b.total as f32
-                            }
-                        })
-                        .unwrap_or(0.),
+                    progress: busy.map_or(0., Busy::fraction),
+                    phase: busy
+                        .map(|b| format!("{} {:.0}%", b.phase, b.fraction() * 100.))
+                        .unwrap_or_default()
+                        .into(),
                 }
             })
             .collect();
@@ -130,9 +137,9 @@ impl LogsTab {
     }
 }
 
-fn set_progress(app: &App, downloaded: u64) {
+fn set_progress(app: &App, done: u64) {
     if let Some(busy) = &mut app.logs_tab.borrow_mut().busy {
-        busy.downloaded = downloaded;
+        busy.done = done;
     }
     app.render_logs();
 }
@@ -159,6 +166,9 @@ async fn run_job_inner(app: &Rc<App>, name: &str) -> anyhow::Result<String> {
     let bin_path: PathBuf = bin_dir.join(name);
     std::fs::write(&bin_path, &raw)?;
 
+    if let Some(busy) = &mut app.logs_tab.borrow_mut().busy {
+        busy.phase = "parsing";
+    }
     set_progress(app, 0);
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
     let parse = app::run_blocking(move || {

@@ -158,7 +158,7 @@ struct Connection {
 
 impl Connection {
     fn open(port_name: &str) -> anyhow::Result<Self> {
-        let mut port = serialport::new(port_name, 115200)
+        let port = serialport::new(port_name, 115200)
             .timeout(Duration::from_millis(12_000))
             .open()?;
         port.clear(serialport::ClearBuffer::Input).ok();
@@ -359,22 +359,26 @@ const SILICON_LABS_VID: u16 = 0x10c4;
 const CP210X_PID: u16 = 0xea60;
 
 pub fn find_port() -> Option<String> {
-    serialport::available_ports()
-        .ok()?
-        .into_iter()
-        .find_map(|p| match p.port_type {
-            serialport::SerialPortType::UsbPort(info)
-                if info.vid == ESPRESSIF_VID && info.pid != ROM_DOWNLOAD_PID =>
-            {
-                Some(p.port_name)
-            }
-            serialport::SerialPortType::UsbPort(info)
-                if info.vid == SILICON_LABS_VID && info.pid == CP210X_PID =>
-            {
-                Some(p.port_name)
-            }
-            _ => None,
+    let ports = serialport::available_ports().ok()?;
+    let usb = |p: &serialport::SerialPortInfo| match &p.port_type {
+        serialport::SerialPortType::UsbPort(info) => Some((info.vid, info.pid)),
+        _ => None,
+    };
+    ports
+        .iter()
+        .find(|p| {
+            usb(p).is_some_and(|(vid, pid)| {
+                (vid == ESPRESSIF_VID && pid != ROM_DOWNLOAD_PID)
+                    || (vid == SILICON_LABS_VID && pid == CP210X_PID)
+            })
         })
+        .or_else(|| ports.iter().find(|p| usb(p).is_some()))
+        .or_else(|| {
+            ports
+                .iter()
+                .find(|p| cfg!(windows) && matches!(p.port_type, serialport::SerialPortType::Unknown))
+        })
+        .map(|p| p.port_name.clone())
 }
 
 #[derive(Clone, Default)]

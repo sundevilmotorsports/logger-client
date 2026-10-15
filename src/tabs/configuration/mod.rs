@@ -85,7 +85,10 @@ impl ConfigurationTab {
             self.can_devices.iter().map(CanDeviceForm::to_ui).collect(),
         ));
         s.set_adc_channels(app::model(
-            self.adc_channels.iter().map(AdcChannelForm::to_ui).collect(),
+            self.adc_channels
+                .iter()
+                .map(AdcChannelForm::to_ui)
+                .collect(),
         ));
     }
 }
@@ -206,12 +209,10 @@ pub fn wire(app: &Rc<App>, ui: &AppWindow) {
 
     let a = app.clone();
     s.on_set_muxed(move |dev, muxed| {
-        device(&a, dev, |d| {
-            match (&d.signals, muxed) {
-                (SignalsForm::Fixed(_), true) => d.signals = SignalsForm::empty_muxed(),
-                (SignalsForm::Muxed { .. }, false) => d.signals = SignalsForm::Fixed(Vec::new()),
-                _ => {}
-            }
+        device(&a, dev, |d| match (&d.signals, muxed) {
+            (SignalsForm::Fixed(_), true) => d.signals = SignalsForm::empty_muxed(),
+            (SignalsForm::Muxed { .. }, false) => d.signals = SignalsForm::Fixed(Vec::new()),
+            _ => {}
         });
         a.render_configuration();
     });
