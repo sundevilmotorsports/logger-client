@@ -1,4 +1,4 @@
-use serialport::{SerialPort, SerialPortType};
+use serialport::SerialPort;
 use std::collections::VecDeque;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6,21 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const MAX_LINES: usize = 5000;
-const ESPRESSIF_VID: u16 = 0x303a;
-const JTAG_SERIAL_PID: u16 = 0x1001;
 
 pub fn find_port() -> Option<String> {
-    serialport::available_ports()
-        .ok()?
-        .into_iter()
-        .find_map(|p| match p.port_type {
-            SerialPortType::UsbPort(info)
-                if info.vid == ESPRESSIF_VID && info.pid == JTAG_SERIAL_PID =>
-            {
-                Some(p.port_name)
-            }
-            _ => None,
-        })
+    crate::device::find_port()
 }
 
 pub fn open(port_name: &str) -> anyhow::Result<Box<dyn SerialPort>> {
@@ -66,6 +54,10 @@ impl SharedLines {
 
     pub fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn snapshot(&self) -> VecDeque<String> {

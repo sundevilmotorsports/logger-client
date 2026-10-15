@@ -1,0 +1,181 @@
+import { Theme, Tone } from "theme.slint";
+import { Button, ButtonKind, Dot, Label, TabBar } from "widgets.slint";
+import { HomePage, HomeState } from "tabs/home.slint";
+import { DevicesPage, DevicesState } from "tabs/devices.slint";
+import { LogsPage, LogsState } from "tabs/logs.slint";
+import { ConsolePage, ConsoleState } from "tabs/console.slint";
+import { ConfigurationPage, ConfigState } from "tabs/configuration.slint";
+import { InfoPage, InfoState } from "tabs/info.slint";
+
+export { Tone, HomeState, DevicesState, LogsState, ConsoleState, ConfigState, InfoState }
+export { Span, KvRow } from "widgets.slint";
+export { DeviceRow } from "tabs/devices.slint";
+export { LogRow } from "tabs/logs.slint";
+export { ConsoleLine } from "tabs/console.slint";
+export { Signal, SignalGroup, CanDevice, AdcChannel } from "tabs/configuration.slint";
+
+export struct Toast {
+    message: string,
+    error: bool,
+}
+
+export global AppState {
+    in property <string> title: "Logger Client";
+    in-out property <int> tab;
+    in property <bool> connected;
+    in property <[Toast]> toasts;
+    callback tab-selected(index: int);
+    callback restart();
+    callback parse-log-file();
+    callback parse-log-folder();
+    callback quit();
+}
+
+component ToastStack inherits VerticalLayout {
+    spacing: 8px;
+    alignment: end;
+
+    for toast in AppState.toasts: card := Rectangle {
+        property <color> tint: toast.error ? Theme.red : Theme.green;
+        max-width: 320px;
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: self.tint;
+        background: Theme.panel;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000080;
+        drop-shadow-offset-y: 2px;
+
+        HorizontalLayout {
+            padding: 8px;
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 8px;
+            alignment: start;
+            Dot { color: card.tint; vertical-alignment: top; }
+            Text {
+                text: toast.message;
+                color: Theme.fg;
+                font-size: Theme.font-size;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: AppState.title;
+    preferred-width: 780px;
+    preferred-height: 540px;
+    min-width: 520px;
+    min-height: 360px;
+    background: Theme.bg;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+    forward-focus: keys;
+
+    keys := FocusScope {
+        // Bare "q" quits, but only when nothing else (e.g. a text field)
+        // took the key first.
+        key-pressed(event) => {
+            if event.text == "o" && event.modifiers.control {
+                AppState.parse-log-file();
+                return accept;
+            }
+            if event.text == "q" && !event.modifiers.control && !event.modifiers.meta && !event.modifiers.alt {
+                AppState.quit();
+                return accept;
+            }
+            reject
+        }
+
+        // Console and Configuration want the full width; the other tabs
+        // stay capped to a comfortable reading column.
+        property <bool> wide: AppState.tab == 3 || AppState.tab == 4;
+
+        body := Rectangle {
+            x: 32px;
+            y: Theme.titlebar-height + 24px;
+            width: keys.wide ? parent.width - 64px : min(parent.width - 64px, 640px - 64px);
+            height: parent.height - self.y - 32px;
+
+            if AppState.tab == 0: HomePage { width: 100%; height: 100%; }
+            if AppState.tab == 1: DevicesPage { width: 100%; height: 100%; }
+            if AppState.tab == 2: LogsPage { width: 100%; height: 100%; }
+            if AppState.tab == 3: ConsolePage { width: 100%; height: 100%; }
+            if AppState.tab == 4: ConfigurationPage { width: 100%; height: 100%; }
+            if AppState.tab == 5: InfoPage { width: 100%; height: 100%; }
+        }
+
+        // Full-width strip behind the tabs, colored differently from the body.
+        Rectangle {
+            y: 0;
+            height: Theme.titlebar-height;
+            background: Theme.titlebar;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.border;
+            }
+
+            TabBar {
+                x: Theme.titlebar-inset;
+                y: parent.height - self.height;
+                tabs: ["Home", "Devices", "Logs", "Console", "Configuration", "Info"];
+                current: AppState.tab;
+                select(i) => {
+                    AppState.tab = i;
+                    AppState.tab-selected(i);
+                }
+            }
+
+            HorizontalLayout {
+                x: parent.width - self.width - Theme.titlebar-inset;
+                width: self.preferred-width;
+                spacing: 16px;
+                alignment: end;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    Dot { color: AppState.connected ? Theme.green : Theme.muted; }
+                    Label {
+                        text: AppState.connected ? "connected" : "disconnected";
+                        color: Theme.muted;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "parse file";
+                        clicked => { AppState.parse-log-file(); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "parse folder";
+                        clicked => { AppState.parse-log-folder(); }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Button {
+                        text: "restart";
+                        kind: ButtonKind.danger;
+                        clicked => { AppState.restart(); }
+                    }
+                }
+            }
+        }
+
+        ToastStack {
+            x: parent.width - self.width - 16px;
+            y: parent.height - self.height - 16px;
+            width: min(self.preferred-width, 320px);
+        }
+    }
+}

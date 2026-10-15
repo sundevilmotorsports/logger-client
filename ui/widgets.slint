@@ -1,0 +1,381 @@
+// Small hand-rolled widget set styled after the old gpui-component look:
+// compact controls, 4px radii, muted chrome with a single accent.
+
+import { Theme, Tone } from "theme.slint";
+
+export struct Span {
+    text: string,
+    tone: Tone,
+}
+
+export struct KvRow {
+    label: string,
+    spans: [Span],
+}
+
+export component Label inherits Text {
+    color: Theme.fg;
+    font-size: Theme.font-size;
+    vertical-alignment: center;
+    overflow: elide;
+}
+
+export component Dot inherits Text {
+    text: "●";
+    font-size: Theme.font-size;
+    vertical-alignment: center;
+}
+
+export enum ButtonKind { normal, primary, ghost, danger }
+
+export component Button {
+    in property <string> text;
+    in property <ButtonKind> kind: ButtonKind.normal;
+    in property <bool> enabled: true;
+    in property <bool> selected;
+    callback clicked();
+
+    property <color> base: root.kind == ButtonKind.primary ? Theme.accent
+        : root.selected ? Theme.control-active
+        : root.kind == ButtonKind.normal ? Theme.control
+        : transparent;
+    property <color> hover-bg: root.kind == ButtonKind.primary ? Theme.accent.brighter(12%)
+        : root.kind == ButtonKind.danger ? Theme.red.transparentize(85%)
+        : Theme.control-hover;
+    property <color> label-color: !root.enabled ? Theme.muted
+        : root.kind == ButtonKind.primary ? Theme.bg
+        : root.kind == ButtonKind.danger ? Theme.red
+        : Theme.fg;
+
+    min-width: label.preferred-width + 20px;
+    height: Theme.control-height;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+
+    bg := Rectangle {
+        border-radius: Theme.radius;
+        background: !root.enabled ? root.base
+            : touch.pressed ? root.hover-bg.darker(15%)
+            : touch.has-hover ? root.hover-bg
+            : root.base;
+        animate background { duration: 90ms; }
+    }
+
+    label := Text {
+        text: root.text;
+        color: root.label-color;
+        font-size: Theme.font-size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component CheckBox {
+    in property <string> text;
+    in-out property <bool> checked;
+    callback toggled(checked: bool);
+
+    height: Theme.control-height;
+    horizontal-stretch: 0;
+    accessible-role: checkbox;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-label: root.text;
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            box := Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 3px;
+                border-width: 1px;
+                border-color: root.checked ? Theme.accent : touch.has-hover ? Theme.muted : Theme.border;
+                background: root.checked ? Theme.accent : Theme.bg;
+                animate background, border-color { duration: 90ms; }
+
+                Path {
+                    visible: root.checked;
+                    width: 10px;
+                    height: 10px;
+                    stroke: Theme.bg;
+                    stroke-width: 1.6px;
+                    viewbox-width: 10;
+                    viewbox-height: 10;
+                    MoveTo { x: 1.5; y: 5.2; }
+                    LineTo { x: 4; y: 7.6; }
+                    LineTo { x: 8.5; y: 2.4; }
+                }
+            }
+        }
+
+        Label {
+            text: root.text;
+            color: Theme.fg;
+            min-width: self.preferred-width;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// Single-line text field. `edited` fires on every keystroke with the full text.
+export component Field {
+    in-out property <string> text;
+    in property <string> placeholder;
+    callback edited(text: string);
+
+    height: Theme.control-height;
+    min-width: 32px;
+    horizontal-stretch: 0;
+    accessible-role: text-input;
+    accessible-value: root.text;
+    forward-focus: input;
+
+    Rectangle {
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : touch.has-hover ? Theme.control-active : Theme.border;
+        background: Theme.bg;
+        animate border-color { duration: 90ms; }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: MouseCursor.text;
+        clicked => { input.focus(); }
+    }
+
+    Rectangle {
+        x: 7px;
+        width: parent.width - 14px;
+        clip: true;
+
+        Text {
+            visible: input.text == "" && !input.has-focus;
+            text: root.placeholder;
+            color: Theme.muted;
+            font-size: Theme.font-size;
+            vertical-alignment: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        input := TextInput {
+            text <=> root.text;
+            color: Theme.fg;
+            font-size: Theme.font-size;
+            selection-background-color: Theme.selection;
+            selection-foreground-color: Theme.fg;
+            vertical-alignment: center;
+            single-line: true;
+            width: max(parent.width, self.preferred-width);
+            height: 100%;
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+// Underlined tab strip, like gpui-component's `TabBar::underline()`.
+export component TabBar {
+    in property <[string]> tabs;
+    in property <int> current;
+    callback select(index: int);
+
+    height: 28px;
+    horizontal-stretch: 0;
+
+    HorizontalLayout {
+        alignment: start;
+        spacing: 2px;
+
+        for tab[i] in root.tabs: Rectangle {
+            property <bool> active: i == root.current;
+            width: text.preferred-width + 20px;
+
+            text := Text {
+                text: tab;
+                font-size: Theme.font-size;
+                color: parent.active || area.has-hover ? Theme.fg : Theme.muted;
+                vertical-alignment: center;
+                animate color { duration: 90ms; }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: 2px;
+                width: parent.active ? parent.width - 12px : 0;
+                border-radius: 1px;
+                background: Theme.accent;
+                animate width { duration: 140ms; easing: ease-out; }
+            }
+
+            area := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.select(i); }
+            }
+        }
+    }
+}
+
+export component ProgressBar {
+    // 0.0 ..= 1.0
+    in property <float> value;
+
+    height: 4px;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-radius: 2px;
+        background: Theme.control;
+    }
+
+    Rectangle {
+        x: 0;
+        width: parent.width * clamp(root.value, 0, 1);
+        border-radius: 2px;
+        background: Theme.green;
+        animate width { duration: 120ms; }
+    }
+}
+
+export component Spinner {
+    in property <length> size: 14px;
+    width: root.size;
+    height: root.size;
+
+    Path {
+        width: root.size;
+        height: root.size;
+        stroke: Theme.muted;
+        stroke-width: 1.6px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        transform-rotation: mod(animation-tick(), 900ms) / 900ms * 360deg;
+        commands: "M 8 1.5 A 6.5 6.5 0 1 1 1.5 8";
+    }
+}
+
+// Label/value table with a tinted label column, like gpui-component's
+// bordered `DescriptionList`.
+export component KvList {
+    in property <[KvRow]> rows;
+    in property <length> label-width: 90px;
+
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+        clip: true;
+
+        VerticalLayout {
+            for row[i] in root.rows: Rectangle {
+                height: 30px;
+
+                HorizontalLayout {
+                    Rectangle {
+                        width: root.label-width;
+                        background: Theme.panel;
+                        Label {
+                            x: 10px;
+                            text: row.label;
+                            color: Theme.muted;
+                        }
+                    }
+
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 12px;
+                        alignment: start;
+                        for span in row.spans: Label {
+                            text: span.text;
+                            color: Theme.tone(span.tone);
+                        }
+                    }
+                }
+
+                if i > 0: Rectangle {
+                    y: 0;
+                    height: 1px;
+                    background: Theme.border;
+                }
+            }
+        }
+    }
+}
+
+export component EmptyState {
+    in property <string> text;
+    in property <bool> spinner;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.spinner: HorizontalLayout {
+            alignment: center;
+            Spinner { }
+        }
+        Label {
+            text: root.text;
+            color: Theme.muted;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+// Rounded list row with a hover tint, like gpui-component's `ListItem`.
+export component ListRow inherits Rectangle {
+    border-radius: 3px;
+    background: hover.has-hover ? Theme.panel : transparent;
+    min-height: 30px;
+
+    hover := TouchArea { }
+    @children
+}
+
+export component SectionHeader {
+    in property <string> title;
+    in property <string> action;
+    callback action-clicked();
+
+    HorizontalLayout {
+        Label { text: root.title; }
+        Button {
+            text: root.action;
+            kind: ButtonKind.ghost;
+            clicked => { root.action-clicked(); }
+        }
+    }
+}
+
+// Tinted block used by the configuration editor for rows and nested blocks.
+export component Panel inherits Rectangle {
+    background: Theme.panel;
+    border-radius: 3px;
+}

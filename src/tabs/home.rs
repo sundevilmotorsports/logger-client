@@ -1,10 +1,9 @@
-use gpui::{AnyElement, Hsla, div, prelude::*, px};
-use gpui_component::description_list::DescriptionList;
-use gpui_component::label::Label;
-use gpui_component::{Sizable, h_flex};
+use slint::ComponentHandle;
 
-use crate::device::{self, DeviceState, DeviceStatusFlags, Resources};
-use crate::theme::{self, FONT_SIZE};
+use super::{kv_row, span};
+use crate::app::model;
+use crate::device::{DeviceState, DeviceStatusFlags, Resources};
+use crate::ui::{AppWindow, HomeState, Span, Tone};
 
 fn format_uptime(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
@@ -19,127 +18,101 @@ fn format_kb(bytes: u32) -> String {
     format!("{} KB", bytes / 1024)
 }
 
-fn resources_row(resources: Option<Resources>) -> AnyElement {
+fn resources_spans(resources: Option<&Resources>) -> Vec<Span> {
     let Some(r) = resources else {
-        return Label::new("—").text_color(theme::muted()).into_any_element();
+        return vec![span("—", Tone::Muted)];
     };
 
-    let mut row = h_flex().gap(px(12.));
-    row = row.child(
-        Label::new(format!(
+    let mut spans = vec![span(
+        format!(
             "heap {} (min {})",
             format_kb(r.heap_free),
             format_kb(r.heap_min_free)
-        ))
-        .text_color(theme::fg()),
-    );
+        ),
+        Tone::Fg,
+    )];
     for (i, load) in r.cpu_load.iter().enumerate() {
-        let color = match load {
-            l if *l >= 90.0 => theme::red(),
-            l if *l >= 70.0 => theme::amber(),
-            _ => theme::green(),
+        let tone = match load {
+            l if *l >= 90.0 => Tone::Red,
+            l if *l >= 70.0 => Tone::Amber,
+            _ => Tone::Green,
         };
-        row = row.child(Label::new(format!("core{i} {load:.0}%")).text_color(color));
+        spans.push(span(format!("core{i} {load:.0}%"), tone));
     }
-    row.into_any_element()
+    spans
 }
 
-fn value(text: String, color: Hsla) -> AnyElement {
-    Label::new(text).text_color(color).into_any_element()
-}
-
-fn health_row(status: Option<DeviceStatusFlags>) -> AnyElement {
+fn health_spans(status: Option<DeviceStatusFlags>) -> Vec<Span> {
     let items: [(&str, Option<bool>); 7] = [
         ("adc", status.map(|s| s.adc)),
         ("can", status.map(|s| s.can)),
         ("gnss", status.map(|s| s.gnss)),
-        ("imu", status.map(|s| s.imu)),
+        ("power", status.map(|s| s.power)),
         ("logging", status.map(|s| s.logging)),
         ("sd", status.map(|s| s.sd)),
-        ("usb", status.map(|s| s.usb_hs)),
+        ("serial", status.map(|s| s.serial)),
     ];
 
-    let mut row = h_flex().gap(px(12.));
-    for (label, ok) in items {
-        let color = match ok {
-            Some(true) => theme::green(),
-            Some(false) => theme::red(),
-            None => theme::muted(),
-        };
-        row = row.child(Label::new(label).text_color(color));
-    }
-    row.into_any_element()
+    items
+        .into_iter()
+        .map(|(label, ok)| {
+            let tone = match ok {
+                Some(true) => Tone::Green,
+                Some(false) => Tone::Red,
+                None => Tone::Muted,
+            };
+            span(label, tone)
+        })
+        .collect()
 }
 
-#[derive(Default)]
-pub struct HomeTab;
+pub fn render(state: &DeviceState, ui: &AppWindow) {
+    let status = match &state.port {
+        Some(_) => span("connected", Tone::Green),
+        None => span("scanning...", Tone::Amber),
+    };
+    let port = state.port.as_deref().unwrap_or("—");
+    let uptime = state
+        .uptime
+        .map(format_uptime)
+        .unwrap_or_else(|| "—".to_string());
 
-impl HomeTab {
-    pub fn render(&self, state: &DeviceState, _req_tx: &device::RequestTx) -> AnyElement {
-        let (status, status_color) = match &state.port {
-            Some(_) => ("connected".to_string(), theme::green()),
-            None => ("scanning...".to_string(), theme::amber()),
-        };
-        let port = state.port.clone().unwrap_or_else(|| "—".to_string());
-        let uptime = state
-            .uptime
-            .map(format_uptime)
-            .unwrap_or_else(|| "—".to_string());
+    let logging = match state.logging_active {
+        Some(true) => span("recording", Tone::Green),
+        Some(false) => span("paused", Tone::Amber),
+        None => span("—", Tone::Muted),
+    };
+    let current_log = state.current_log.as_deref().unwrap_or("—");
 
-        let (logging, logging_color) = match state.logging_active {
-            Some(true) => ("recording".to_string(), theme::green()),
-            Some(false) => ("paused".to_string(), theme::amber()),
-            None => ("—".to_string(), theme::muted()),
-        };
-        let current_log = state.current_log.clone().unwrap_or_else(|| "—".to_string());
-
-        let (gps_str, gps_color) = match &state.gps {
-            Some(f) => (
-                format!(
-                    "{:.5}, {:.5}  {:.0}m  {} sats",
-                    f.lat, f.lon, f.alt_m, f.sats
-                ),
-                theme::green(),
+    let gps = match &state.gps {
+        Some(f) => span(
+            format!(
+                "{:.5}, {:.5}  {:.0}m  {} sats",
+                f.lat, f.lon, f.alt_m, f.sats
             ),
-            None => ("no fix".to_string(), theme::muted()),
-        };
+            Tone::Green,
+        ),
+        None => span("no fix", Tone::Muted),
+    };
 
-        let (imu_str, imu_color) = match &state.imu {
-            Some(i) => (
-                format!(
-                    "{:.2}x {:.2}y {:.2}z, {:.1}c, mag {:.1}/{:.1}/{:.1}uT",
-                    i.accel_g[0],
-                    i.accel_g[1],
-                    i.accel_g[2],
-                    i.temp_c,
-                    i.mag_ut[0],
-                    i.mag_ut[1],
-                    i.mag_ut[2]
-                ),
-                theme::green(),
-            ),
-            None => ("no imu".to_string(), theme::muted()),
-        };
+    let power = match &state.power {
+        Some(p) => span(
+            format!("{:.0} mA, {:.0} mV", p.current_ma(), p.voltage_mv()),
+            Tone::Green,
+        ),
+        None => span("no reading", Tone::Muted),
+    };
 
-        div()
-            .font(theme::mono_font())
-            .text_size(px(FONT_SIZE))
-            .child(
-                DescriptionList::horizontal()
-                    .small()
-                    .columns(1)
-                    .bordered(true)
-                    .label_width(px(90.))
-                    .item("status", value(status, status_color), 1)
-                    .item("port", value(port, theme::fg()), 1)
-                    .item("uptime", value(uptime, theme::fg()), 1)
-                    .item("health", health_row(state.status), 1)
-                    .item("resources", resources_row(state.resources.clone()), 1)
-                    .item("logging", value(logging, logging_color), 1)
-                    .item("file", value(current_log, theme::fg()), 1)
-                    .item("gps", value(gps_str, gps_color), 1)
-                    .item("imu", value(imu_str, imu_color), 1),
-            )
-            .into_any_element()
-    }
+    let rows = vec![
+        kv_row("status", vec![status]),
+        kv_row("port", vec![span(port, Tone::Fg)]),
+        kv_row("uptime", vec![span(uptime, Tone::Fg)]),
+        kv_row("health", health_spans(state.status)),
+        kv_row("resources", resources_spans(state.resources.as_ref())),
+        kv_row("logging", vec![logging]),
+        kv_row("file", vec![span(current_log, Tone::Fg)]),
+        kv_row("gps", vec![gps]),
+        kv_row("power", vec![power]),
+    ];
+    ui.global::<HomeState>().set_rows(model(rows));
 }

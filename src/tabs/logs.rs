@@ -1,41 +1,87 @@
-use gpui::{AnyElement, AsyncApp, Context, IntoElement, WeakEntity, div, prelude::*, px};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::label::Label;
-use gpui_component::list::ListItem;
-use gpui_component::progress::Progress;
-use gpui_component::{Disableable, Sizable, h_flex, v_flex};
+use slint::ComponentHandle;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::rc::Rc;
 
+use crate::app::{self, App, model};
 use crate::device::{self, DeviceState};
 use crate::log_parse;
-use crate::root_view::{self, RootView};
-use crate::theme;
+use crate::motec;
+use crate::ui::{AppWindow, LogRow, LogsState, Tone};
 
 #[derive(Default)]
 pub struct LogsTab {
     entries: Vec<device::LogEntry>,
-    status: Status,
     busy: Option<Busy>,
     last_result: Option<Result<String, String>>,
 }
 
-#[derive(Default)]
-enum Status {
-    #[default]
-    Idle,
-    Loading,
-    Error(String),
-}
-
 struct Busy {
     name: String,
-    downloaded: u64,
+    phase: &'static str,
+    done: u64,
     total: u64,
 }
 
+impl Busy {
+    fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            1.
+        } else {
+            (self.done as f32 / self.total as f32).min(1.)
+        }
+    }
+}
+
+pub fn wire(app: &Rc<App>, ui: &AppWindow) {
+    let s = ui.global::<LogsState>();
+
+    let a = app.clone();
+    s.on_pause(move || {
+        let resume = !matches!(a.state.borrow().logging_active, Some(true));
+        let a = a.clone();
+        app::spawn(async move {
+            let label = if resume { "resume" } else { "pause" };
+            app::run_command_toast(&a, device::Command::SetLogging { active: resume }, label).await
+        });
+    });
+
+    let a = app.clone();
+    s.on_new_log(move || {
+        let a = a.clone();
+        app::spawn(
+            async move { app::run_command_toast(&a, device::Command::NextLog, "new log").await },
+        );
+    });
+
+    let a = app.clone();
+    s.on_get(move |ix| {
+        let name = {
+            let mut tab = a.logs_tab.borrow_mut();
+            if tab.busy.is_some() {
+                return;
+            }
+            let Some(entry) = tab.entries.get(ix as usize) else {
+                return;
+            };
+            let (name, total) = (entry.name.clone(), entry.size);
+            tab.busy = Some(Busy {
+                name: name.clone(),
+                phase: "downloading",
+                done: 0,
+                total,
+            });
+            tab.last_result = None;
+            name
+        };
+        a.render_logs();
+
+        let a = a.clone();
+        app::spawn(async move { run_job(&a, name).await });
+    });
+}
+
 impl LogsTab {
-    /// Used by the periodic background poll (see `RootView::sync_logs_poll`).
+    /// Used by the periodic background poll (see `App::sync_logs_poll`).
     /// Sorted newest first -- names are zero-padded ("0001.bin", "0002.bin",
     /// ...) so a plain string sort already puts them in numeric order.
     pub(crate) fn set_entries(&mut self, mut entries: Vec<device::LogEntry>) {
@@ -43,290 +89,111 @@ impl LogsTab {
         self.entries = entries;
     }
 
-    pub fn render(
-        &self,
-        state: &DeviceState,
-        req_tx: &device::RequestTx,
-        log_tx: &device::LogRequestTx,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
-        let (status_text, status_color) = match &self.status {
-            Status::Idle if self.entries.is_empty() => (String::new(), theme::muted()),
-            Status::Idle => (format!("{} log(s)", self.entries.len()), theme::muted()),
-            Status::Loading => ("loading...".to_string(), theme::amber()),
-            Status::Error(e) => (format!("error: {e}"), theme::red()),
-        };
+    pub fn render(&self, state: &DeviceState, ui: &AppWindow) {
+        let rows: Vec<LogRow> = self
+            .entries
+            .iter()
+            .map(|entry| {
+                let busy = self.busy.as_ref().filter(|b| b.name == entry.name);
+                LogRow {
+                    name: entry.name.clone().into(),
+                    size: format_size(entry.size).into(),
+                    current: state.current_log.as_deref() == Some(entry.name.as_str())
+                        && state.logging_active == Some(true),
+                    busy: busy.is_some(),
+                    progress: busy.map_or(0., Busy::fraction),
+                    phase: busy
+                        .map(|b| format!("{} {:.0}%", b.phase, b.fraction() * 100.))
+                        .unwrap_or_default()
+                        .into(),
+                }
+            })
+            .collect();
 
-        let body: AnyElement = if self.entries.is_empty() {
-            super::empty_state("no logs yet")
+        let s = ui.global::<LogsState>();
+        s.set_rows(model(rows));
+        s.set_status_text(if self.entries.is_empty() {
+            "".into()
         } else {
-            let mut rows = v_flex().items_start().gap(px(2.));
-            for (idx, entry) in self.entries.iter().enumerate() {
-                rows = rows.child(self.entry_row(idx, entry, state, log_tx, cx));
-            }
-            rows.into_any_element()
-        };
+            format!("{} log(s)", self.entries.len()).into()
+        });
+        s.set_status_tone(Tone::Muted);
 
-        let mut root = v_flex()
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .size_full()
-            .gap(px(12.))
-            .child(self.toolbar(state, req_tx, log_tx, status_text, status_color, cx))
-            .child(
-                div()
-                    .id("logs-scroll")
-                    .overflow_y_scroll()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(body),
-            );
-
-        if let Some(result) = &self.last_result {
-            let (msg, color) = match result {
-                Ok(msg) => (msg.clone(), theme::green()),
-                Err(msg) => (msg.clone(), theme::red()),
-            };
-            root = root.child(Label::new(msg).text_color(color));
-        }
-
-        root.into_any_element()
-    }
-
-    fn toolbar(
-        &self,
-        state: &DeviceState,
-        req_tx: &device::RequestTx,
-        log_tx: &device::LogRequestTx,
-        status_text: String,
-        status_color: gpui::Hsla,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
-        let (pause_label, pause_active) = match state.logging_active {
+        let (pause_label, pause_enabled) = match state.logging_active {
             Some(true) => ("pause", true),
             Some(false) => ("resume", true),
             None => ("pause", false),
         };
-        let resume = !matches!(state.logging_active, Some(true));
-        let pause_log_tx = log_tx.clone();
-        let weak = cx.weak_entity();
-        let pause_btn = Button::new("logs-pause")
-            .label(pause_label)
-            .small()
-            .disabled(!pause_active)
-            .on_click(move |_, _, app| {
-                let log_tx = pause_log_tx.clone();
-                let weak = weak.clone();
-                app.spawn(async move |cx| {
-                    let label = if resume { "resume" } else { "pause" };
-                    root_view::run_command_toast(
-                        weak,
-                        cx,
-                        log_tx,
-                        device::Command::SetLogging { active: resume },
-                        label,
-                    )
-                    .await
-                })
-                .detach();
-            });
+        s.set_pause_label(pause_label.into());
+        s.set_pause_enabled(pause_enabled);
 
-        let next_log_tx = log_tx.clone();
-        let weak = cx.weak_entity();
-        let next_btn = Button::new("logs-next")
-            .label("new log")
-            .small()
-            .on_click(move |_, _, app| {
-                let log_tx = next_log_tx.clone();
-                let weak = weak.clone();
-                app.spawn(async move |cx| {
-                    root_view::run_command_toast(
-                        weak,
-                        cx,
-                        log_tx,
-                        device::Command::NextLog,
-                        "new log",
-                    )
-                    .await
-                })
-                .detach();
-            });
-
-        h_flex()
-            .justify_between()
-            .gap(px(8.))
-            .child(h_flex().gap(px(8.)).child(pause_btn).child(next_btn))
-            .child(Label::new(status_text).text_color(status_color))
-            .into_any_element()
-    }
-
-    fn entry_row(
-        &self,
-        idx: usize,
-        entry: &device::LogEntry,
-        state: &DeviceState,
-        log_tx: &device::LogRequestTx,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
-        let is_current = state.current_log.as_deref() == Some(entry.name.as_str())
-            && state.logging_active == Some(true);
-        let name_color = if is_current {
-            theme::green()
-        } else {
-            theme::fg()
+        let (text, tone) = match &self.last_result {
+            Some(Ok(m)) => (m.as_str(), Tone::Green),
+            Some(Err(m)) => (m.as_str(), Tone::Red),
+            None => ("", Tone::Muted),
         };
-
-        let busy = self.busy.as_ref().filter(|b| b.name == entry.name);
-        let label = if busy.is_some() { "working..." } else { "get" };
-
-        let log_tx = log_tx.clone();
-        let name = entry.name.clone();
-        let total = entry.size;
-        let weak = cx.weak_entity();
-        let get_btn = Button::new(("logs-get", idx))
-            .label(label)
-            .ghost()
-            .small()
-            .disabled(busy.is_some())
-            .on_click(move |_, _, app| {
-                let log_tx = log_tx.clone();
-                let name = name.clone();
-                let weak = weak.clone();
-                weak.update(app, |this, cx| {
-                    if this.logs_tab.busy.is_some() {
-                        return;
-                    }
-                    this.logs_tab.busy = Some(Busy {
-                        name: name.clone(),
-                        downloaded: 0,
-                        total,
-                    });
-                    this.logs_tab.last_result = None;
-                    cx.notify();
-
-                    cx.spawn(async move |weak, cx| run_job(weak, cx, log_tx, name).await)
-                        .detach();
-                })
-                .ok();
-            });
-
-        let row = ListItem::new(("logs-row", idx))
-            .text_size(px(theme::FONT_SIZE))
-            .rounded_sm()
-            .child(
-                h_flex()
-                    .gap(px(12.))
-                    .child(Label::new(entry.name.clone()).text_color(name_color).w(px(180.)))
-                    .child(
-                        Label::new(format_size(entry.size))
-                            .text_color(theme::muted())
-                            .w(px(64.)),
-                    )
-                    .child(get_btn),
-            );
-
-        match busy {
-            Some(b) => v_flex()
-                .gap(px(2.))
-                .child(row)
-                .child(
-                    div()
-                        .px(px(12.))
-                        .child(progress_bar(b.downloaded, b.total)),
-                )
-                .into_any_element(),
-            None => row.into_any_element(),
-        }
+        s.set_result_text(text.into());
+        s.set_result_tone(tone);
     }
 }
 
-fn progress_callback(weak: WeakEntity<RootView>, mut cx: AsyncApp) -> impl FnMut(u64) {
-    move |downloaded: u64| {
-        weak.update(&mut cx, |view, cx| {
-            if let Some(busy) = &mut view.logs_tab.busy {
-                busy.downloaded = downloaded;
-            }
-            cx.notify();
-        })
-        .ok();
+fn set_progress(app: &App, done: u64) {
+    if let Some(busy) = &mut app.logs_tab.borrow_mut().busy {
+        busy.done = done;
     }
+    app.render_logs();
 }
 
-async fn run_job(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    name: String,
-) {
-    let on_download_progress = progress_callback(weak.clone(), cx.clone());
-    let on_parse_progress = progress_callback(weak.clone(), cx.clone());
-
-    let result = run_job_inner(cx, &log_tx, &name, on_download_progress, on_parse_progress).await;
-    weak.update(cx, |view, cx| {
-        let tab = &mut view.logs_tab;
+async fn run_job(app: &Rc<App>, name: String) {
+    let result = run_job_inner(app, &name).await;
+    {
+        let mut tab = app.logs_tab.borrow_mut();
         tab.busy = None;
         tab.last_result = Some(result.map_err(|e| e.to_string()));
-        cx.notify();
-    })
-    .ok();
+    }
+    app.render_logs();
 }
 
-async fn run_job_inner(
-    cx: &mut AsyncApp,
-    log_tx: &device::LogRequestTx,
-    name: &str,
-    on_download_progress: impl FnMut(u64),
-    mut on_parse_progress: impl FnMut(u64),
-) -> anyhow::Result<String> {
+async fn run_job_inner(app: &Rc<App>, name: &str) -> anyhow::Result<String> {
     let csv_name = format!("{}.csv", name.trim_end_matches(".bin"));
-    let Some(dest) = prompt_save(cx, &csv_name).await? else {
+    let Some(dest) = app::save_file(&std::env::temp_dir(), &csv_name).await else {
         return Ok("cancelled".to_string());
     };
 
-    let raw = device::download_log(log_tx, name, on_download_progress).await?;
-    let tmp_path = std::env::temp_dir().join(name);
-    std::fs::write(&tmp_path, &raw)?;
+    let raw = device::download_log(&app.log_tx, name, |done| set_progress(app, done)).await?;
+    let bin_dir = std::env::temp_dir().join("sdm-logger");
+    std::fs::create_dir_all(&bin_dir)?;
+    let bin_path: PathBuf = bin_dir.join(name);
+    std::fs::write(&bin_path, &raw)?;
 
-    on_parse_progress(0);
+    if let Some(busy) = &mut app.logs_tab.borrow_mut().busy {
+        busy.phase = "parsing";
+    }
+    set_progress(app, 0);
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
-    let parse_handle = std::thread::spawn(move || {
+    let parse = app::run_blocking(move || {
         log_parse::parse_log(&raw, move |done, _total| {
-            let _ = progress_tx.send(done as u64);
+            progress_tx.send(done as u64).ok();
         })
     });
+    // The sender drops when parsing finishes, which ends this loop.
     while let Some(done) = progress_rx.recv().await {
-        on_parse_progress(done);
-        cx.background_executor()
-            .timer(Duration::from_millis(1))
-            .await;
+        set_progress(app, done);
     }
-    let parsed = parse_handle
-        .join()
-        .map_err(|_| anyhow::anyhow!("log parser thread panicked"))??;
+    let parsed = parse.await??;
 
     std::fs::write(&dest, log_parse::to_csv(&parsed))?;
 
+    let ld_dest = dest.with_extension("ld");
+    std::fs::write(&ld_dest, motec::build_ld(&parsed))?;
+
     Ok(format!(
-        "parsed {} rows, saved to {}",
+        "parsed {} rows, saved {}, {} and {}",
         parsed.rows.len(),
-        dest.display()
+        bin_path.display(),
+        dest.display(),
+        ld_dest.display()
     ))
-}
-
-async fn prompt_save(cx: &mut AsyncApp, suggested_name: &str) -> anyhow::Result<Option<PathBuf>> {
-    let dir = std::env::temp_dir();
-    let rx = cx.update(|app| app.prompt_for_new_path(&dir, Some(suggested_name)))?;
-    rx.await
-        .map_err(|_| anyhow::anyhow!("save dialog closed unexpectedly"))?
-}
-
-fn progress_bar(downloaded: u64, total: u64) -> AnyElement {
-    let percent = if total == 0 {
-        100.
-    } else {
-        downloaded as f32 / total as f32 * 100.
-    };
-    Progress::new().value(percent).w_full().into_any_element()
 }
 
 fn format_size(bytes: u64) -> String {

@@ -1,0 +1,110 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Tone } from "../theme.slint";
+import { Button, ButtonKind, EmptyState, Label, ListRow, ProgressBar } from "../widgets.slint";
+
+export struct LogRow {
+    name: string,
+    size: string,
+    // The log currently being recorded
+    current: bool,
+    busy: bool,
+    progress: float,
+    phase: string,
+}
+
+export global LogsState {
+    in property <[LogRow]> rows;
+    in property <string> status-text;
+    in property <Tone> status-tone;
+    in property <string> pause-label: "pause";
+    in property <bool> pause-enabled;
+    in property <string> result-text;
+    in property <Tone> result-tone;
+    callback pause();
+    callback new-log();
+    callback get(index: int);
+}
+
+export component LogsPage {
+    VerticalLayout {
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Button {
+                text: LogsState.pause-label;
+                enabled: LogsState.pause-enabled;
+                clicked => { LogsState.pause(); }
+            }
+            Button {
+                text: "new log";
+                clicked => { LogsState.new-log(); }
+            }
+            Rectangle { }
+            Label {
+                text: LogsState.status-text;
+                color: Theme.tone(LogsState.status-tone);
+                horizontal-alignment: right;
+            }
+        }
+
+        if LogsState.rows.length == 0: EmptyState {
+            text: "no logs yet";
+        }
+
+        if LogsState.rows.length > 0: ScrollView {
+            VerticalLayout {
+                alignment: start;
+                spacing: 2px;
+
+                for row[i] in LogsState.rows: VerticalLayout {
+                    spacing: 2px;
+
+                    ListRow {
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 12px;
+                            alignment: start;
+                            Label {
+                                text: row.name;
+                                color: row.current ? Theme.green : Theme.fg;
+                                width: 180px;
+                            }
+                            Label { text: row.size; color: Theme.muted; width: 64px; }
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: row.busy ? "working..." : "get";
+                                    kind: ButtonKind.ghost;
+                                    enabled: !row.busy;
+                                    clicked => { LogsState.get(i); }
+                                }
+                            }
+                        }
+                    }
+
+                    if row.busy: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        height: 16px;
+                        Label { text: row.phase; color: Theme.muted; }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            ProgressBar { value: row.progress; }
+                        }
+                    }
+                }
+            }
+        }
+
+        if LogsState.result-text != "": Label {
+            text: LogsState.result-text;
+            color: Theme.tone(LogsState.result-tone);
+            wrap: word-wrap;
+            overflow: clip;
+        }
+    }
+}

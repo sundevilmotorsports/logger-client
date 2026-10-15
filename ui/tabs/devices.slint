@@ -1,0 +1,93 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Tone } from "../theme.slint";
+import { Button, ButtonKind, EmptyState, Label, ListRow, ProgressBar } from "../widgets.slint";
+
+export struct DeviceRow {
+    node: string,
+    type: string,
+    status: string,
+    status-tone: Tone,
+    action: string,
+    // An OTA job is running for this node
+    busy: bool,
+    phase: string,
+    progress: float,
+}
+
+export global DevicesState {
+    in property <[DeviceRow]> rows;
+    in property <string> empty-text;
+    // An OTA job is running for some node; disables every update button
+    in property <bool> busy;
+    in property <string> result-text;
+    in property <Tone> result-tone;
+    callback update(index: int);
+}
+
+export component DevicesPage {
+    VerticalLayout {
+        spacing: 12px;
+
+        HorizontalLayout {
+            height: 20px;
+            padding-left: 12px;
+            spacing: 12px;
+            Label { text: "node"; color: Theme.muted; width: 52px; }
+            Label { text: "type"; color: Theme.muted; width: 110px; }
+            Label { text: "status"; color: Theme.muted; }
+        }
+
+        if DevicesState.rows.length == 0: EmptyState {
+            text: DevicesState.empty-text;
+        }
+
+        if DevicesState.rows.length > 0: ScrollView {
+            VerticalLayout {
+                alignment: start;
+                spacing: 2px;
+
+                for row[i] in DevicesState.rows: VerticalLayout {
+                    spacing: 2px;
+
+                    ListRow {
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 12px;
+                            Label { text: row.node; width: 52px; }
+                            Label { text: row.type; width: 110px; }
+                            Label { text: row.status; color: Theme.tone(row.status-tone); horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: row.action;
+                                    kind: ButtonKind.ghost;
+                                    enabled: !DevicesState.busy;
+                                    clicked => { DevicesState.update(i); }
+                                }
+                            }
+                        }
+                    }
+
+                    if row.busy: HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+                        height: 16px;
+                        Label { text: row.phase; color: Theme.muted; }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            ProgressBar { value: row.progress; }
+                        }
+                    }
+                }
+            }
+        }
+
+        if DevicesState.result-text != "": Label {
+            text: DevicesState.result-text;
+            color: Theme.tone(DevicesState.result-tone);
+        }
+    }
+}

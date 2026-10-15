@@ -1,0 +1,12 @@
+import { KvList, KvRow } from "../widgets.slint";
+
+export global HomeState {
+    in property <[KvRow]> rows;
+}
+
+export component HomePage {
+    VerticalLayout {
+        alignment: start;
+        KvList { rows: HomeState.rows; }
+    }
+}

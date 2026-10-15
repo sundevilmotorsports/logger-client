@@ -1,59 +1,28 @@
-mod configuration;
-mod console;
-mod device_info;
-mod devices;
-mod home;
-mod logs;
+pub mod configuration;
+pub mod console;
+pub mod devices;
+pub mod home;
+pub mod info;
+pub mod logs;
 
 pub use configuration::ConfigurationTab;
 pub use console::ConsoleTab;
-pub use device_info::DeviceInfoTab;
 pub use devices::DevicesTab;
-pub use home::HomeTab;
 pub use logs::LogsTab;
 
-use gpui::{AnyElement, prelude::*};
-use gpui_component::label::Label;
-use gpui_component::v_flex;
+use crate::app::model;
+use crate::ui::{KvRow, Span, Tone};
 
-pub(crate) fn empty_state(text: &'static str) -> AnyElement {
-    v_flex()
-        .size_full()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .child(Label::new(text).text_color(crate::theme::muted()))
-        .into_any_element()
+pub(crate) fn span(text: impl Into<slint::SharedString>, tone: Tone) -> Span {
+    Span {
+        text: text.into(),
+        tone,
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tab {
-    Home,
-    Devices,
-    Logs,
-    Console,
-    Configuration,
-    Info,
-}
-
-impl Tab {
-    pub const ALL: [Tab; 6] = [
-        Tab::Home,
-        Tab::Devices,
-        Tab::Logs,
-        Tab::Console,
-        Tab::Configuration,
-        Tab::Info,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Tab::Home => "Home",
-            Tab::Devices => "Devices",
-            Tab::Logs => "Logs",
-            Tab::Console => "Console",
-            Tab::Configuration => "Configuration",
-            Tab::Info => "Info",
-        }
+pub(crate) fn kv_row(label: &str, spans: Vec<Span>) -> KvRow {
+    KvRow {
+        label: label.into(),
+        spans: model(spans),
     }
 }

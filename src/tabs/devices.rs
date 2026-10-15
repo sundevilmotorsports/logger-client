@@ -1,15 +1,10 @@
-use gpui::{AnyElement, AsyncApp, Context, PathPromptOptions, WeakEntity, div, prelude::*, px};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::label::Label;
-use gpui_component::list::ListItem;
-use gpui_component::progress::Progress;
-use gpui_component::{Disableable, Sizable, h_flex, v_flex};
-use std::path::PathBuf;
+use slint::ComponentHandle;
+use std::rc::Rc;
 use std::time::Duration;
 
+use crate::app::{self, App, model};
 use crate::device::{self, CanNode, DeviceState};
-use crate::root_view::RootView;
-use crate::theme;
+use crate::ui::{AppWindow, DeviceRow, DevicesState, Tone};
 
 /// A node is online if its last heartbeat is younger than this. Heartbeats
 /// go out about once a second
@@ -21,6 +16,9 @@ const UPLOAD_CHUNK: usize = 2048;
 #[derive(Default)]
 pub struct DevicesTab {
     nodes: Vec<CanNode>,
+    /// Node ids in the order they were last rendered, so a row index from
+    /// the UI maps back to a node.
+    shown: Vec<u8>,
     job: Option<OtaJob>,
     last_result: Option<Result<String, String>>,
 }
@@ -32,19 +30,41 @@ struct OtaJob {
     total: u64,
 }
 
+pub fn wire(app: &Rc<App>, ui: &AppWindow) {
+    let app = app.clone();
+    ui.global::<DevicesState>().on_update(move |ix| {
+        let node = {
+            let mut tab = app.devices_tab.borrow_mut();
+            let Some(&node) = tab.shown.get(ix as usize) else {
+                return;
+            };
+            if tab.job.is_some() {
+                return;
+            }
+            tab.job = Some(OtaJob {
+                node,
+                phase: "starting",
+                done: 0,
+                total: 0,
+            });
+            tab.last_result = None;
+            node
+        };
+        app.render_devices();
+
+        let app = app.clone();
+        app::spawn(async move { run_ota_job(&app, node).await });
+    });
+}
+
 impl DevicesTab {
-    /// Fed by the background poll in `RootView::sync_devices_poll`.
+    /// Fed by the background poll in `App::sync_devices_poll`.
     pub(crate) fn set_nodes(&mut self, mut nodes: Vec<CanNode>) {
         nodes.sort_by_key(|n| n.node);
         self.nodes = nodes;
     }
 
-    pub fn render(
-        &self,
-        state: &DeviceState,
-        log_tx: &device::LogRequestTx,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
+    pub fn render(&mut self, state: &DeviceState, ui: &AppWindow) {
         const LOGGER: u8 = sdm_utils::Node::Logger as u8;
         let mut nodes = self.nodes.clone();
         if state.port.is_some() && !nodes.iter().any(|n| n.node == LOGGER) {
@@ -57,61 +77,31 @@ impl DevicesTab {
                 },
             );
         }
+        self.shown = nodes.iter().map(|n| n.node).collect();
 
-        let body: AnyElement = if nodes.is_empty() {
-            super::empty_state(if state.port.is_some() {
+        let rows: Vec<DeviceRow> = nodes.iter().map(|n| self.node_row(n, state)).collect();
+
+        let s = ui.global::<DevicesState>();
+        s.set_rows(model(rows));
+        s.set_empty_text(
+            if state.port.is_some() {
                 "no CAN nodes seen yet"
             } else {
                 "no device connected"
-            })
-        } else {
-            let mut rows = v_flex().items_start().gap(px(2.));
-            for (idx, node) in nodes.iter().enumerate() {
-                rows = rows.child(self.node_row(idx, node, state, log_tx, cx));
             }
-            rows.into_any_element()
+            .into(),
+        );
+        s.set_busy(self.job.is_some());
+        let (text, tone) = match &self.last_result {
+            Some(Ok(m)) => (m.as_str(), Tone::Green),
+            Some(Err(m)) => (m.as_str(), Tone::Red),
+            None => ("", Tone::Muted),
         };
-
-        let mut root = v_flex()
-            .font(theme::mono_font())
-            .text_size(px(theme::FONT_SIZE))
-            .size_full()
-            .gap(px(12.))
-            .child(
-                h_flex()
-                    .gap(px(12.))
-                    .child(Label::new("node").text_color(theme::muted()).w(px(52.)))
-                    .child(Label::new("type").text_color(theme::muted()).w(px(110.)))
-                    .child(Label::new("status").text_color(theme::muted())),
-            )
-            .child(
-                div()
-                    .id("devices-scroll")
-                    .overflow_y_scroll()
-                    .flex_1()
-                    .min_h(px(0.))
-                    .child(body),
-            );
-
-        if let Some(result) = &self.last_result {
-            let (msg, color) = match result {
-                Ok(m) => (m.clone(), theme::green()),
-                Err(m) => (m.clone(), theme::red()),
-            };
-            root = root.child(Label::new(msg).text_color(color));
-        }
-
-        root.into_any_element()
+        s.set_result_text(text.into());
+        s.set_result_tone(tone);
     }
 
-    fn node_row(
-        &self,
-        idx: usize,
-        node: &CanNode,
-        state: &DeviceState,
-        log_tx: &device::LogRequestTx,
-        cx: &mut Context<RootView>,
-    ) -> AnyElement {
+    fn node_row(&self, node: &CanNode, state: &DeviceState) -> DeviceRow {
         let is_self = node.node == sdm_utils::Node::Logger as u8;
         let dtype = sdm_utils::DeviceType::from_byte(node.device_type);
         let type_label = match dtype {
@@ -121,111 +111,55 @@ impl DevicesTab {
             _ => dtype.name().to_string(),
         };
 
-        let (status, status_color) = if is_self {
+        let (status, status_tone) = if is_self {
             let label = match &state.firmware_version {
-                Some(v) => format!("{v}"),
+                Some(v) => v.clone(),
                 None => "this device".to_string(),
             };
-            (label, theme::green())
+            (label, Tone::Green)
         } else if node.age_ms < ONLINE_MS {
-            ("online".to_string(), theme::green())
+            ("online".to_string(), Tone::Green)
         } else {
-            (format!("{}s ago", node.age_ms / 1000), theme::muted())
+            (format!("{}s ago", node.age_ms / 1000), Tone::Muted)
         };
 
         let job = self.job.as_ref().filter(|j| j.node == node.node);
-        let busy_anywhere = self.job.is_some();
+        let action = if job.is_some() {
+            "updating..."
+        } else if is_self {
+            "update"
+        } else {
+            "update fw"
+        };
 
-        let node_id = node.node;
-        let log_tx = log_tx.clone();
-        let weak = cx.weak_entity();
-        let update_btn = Button::new(("devices-ota", idx))
-            .label(if job.is_some() {
-                "updating..."
-            } else if is_self {
-                "update"
-            } else {
-                "update fw"
-            })
-            .ghost()
-            .small()
-            .disabled(busy_anywhere)
-            .on_click(move |_, _, app| {
-                let log_tx = log_tx.clone();
-                let weak = weak.clone();
-                weak.update(app, |this, cx| {
-                    if this.devices_tab.job.is_some() {
-                        return;
-                    }
-                    this.devices_tab.job = Some(OtaJob {
-                        node: node_id,
-                        phase: "starting",
-                        done: 0,
-                        total: 0,
-                    });
-                    this.devices_tab.last_result = None;
-                    cx.notify();
-                    cx.spawn(async move |weak, cx| run_ota_job(weak, cx, log_tx, node_id).await)
-                        .detach();
-                })
-                .ok();
-            });
-
-        let row = ListItem::new(("devices-row", idx))
-            .text_size(px(theme::FONT_SIZE))
-            .rounded_sm()
-            .child(
-                h_flex()
-                    .gap(px(12.))
-                    .child(
-                        Label::new(format!("0x{:02X}", node.node))
-                            .text_color(theme::fg())
-                            .w(px(52.)),
-                    )
-                    .child(Label::new(type_label).text_color(theme::fg()).w(px(110.)))
-                    .child(Label::new(status).text_color(status_color).flex_1())
-                    .child(update_btn),
-            );
-
-        match job {
-            Some(j) => v_flex()
-                .gap(px(2.))
-                .child(row)
-                .child(
-                    h_flex()
-                        .px(px(12.))
-                        .gap(px(8.))
-                        .child(Label::new(j.phase).text_color(theme::muted()))
-                        .child(progress_bar(j.done, j.total)),
-                )
-                .into_any_element(),
-            None => row.into_any_element(),
+        DeviceRow {
+            node: format!("0x{:02X}", node.node).into(),
+            r#type: type_label.into(),
+            status: status.into(),
+            status_tone,
+            action: action.into(),
+            busy: job.is_some(),
+            phase: job.map(|j| j.phase).unwrap_or_default().into(),
+            progress: job
+                .filter(|j| j.total > 0)
+                .map(|j| j.done as f32 / j.total as f32)
+                .unwrap_or(0.),
         }
     }
 }
 
-async fn run_ota_job(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    node: u8,
-) {
-    let result = run_ota_job_inner(&weak, cx, &log_tx, node).await;
-    weak.update(cx, |this, cx| {
-        this.devices_tab.job = None;
-        this.devices_tab.last_result = Some(result.map_err(|e| e.to_string()));
-        cx.notify();
-    })
-    .ok();
+async fn run_ota_job(app: &Rc<App>, node: u8) {
+    let result = run_ota_job_inner(app, node).await;
+    {
+        let mut tab = app.devices_tab.borrow_mut();
+        tab.job = None;
+        tab.last_result = Some(result.map_err(|e| e.to_string()));
+    }
+    app.render_devices();
 }
 
-async fn run_ota_job_inner(
-    weak: &WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: &device::LogRequestTx,
-    node: u8,
-) -> anyhow::Result<String> {
-    let Some(path) = prompt_open(cx).await? else {
+async fn run_ota_job_inner(app: &Rc<App>, node: u8) -> anyhow::Result<String> {
+    let Some(path) = app::pick_file("Select firmware .bin").await else {
         return Ok("cancelled".to_string());
     };
     let bytes = std::fs::read(&path)?;
@@ -240,6 +174,7 @@ async fn run_ota_job_inner(
     } else {
         "streaming to node"
     };
+    let log_tx = &app.log_tx;
 
     match device::request(
         log_tx,
@@ -255,7 +190,7 @@ async fn run_ota_job_inner(
         other => anyhow::bail!("unexpected response to ota_flash: {other:?}"),
     }
 
-    set_job(weak, cx, phase, 0, total);
+    set_job(app, phase, 0, total);
     for (i, chunk) in bytes.chunks(UPLOAD_CHUNK).enumerate() {
         let offset = (i * UPLOAD_CHUNK) as u64;
         let committed = match device::request(
@@ -270,16 +205,14 @@ async fn run_ota_job_inner(
             device::Response::OtaUpload { committed } => committed,
             other => anyhow::bail!("unexpected response to ota_upload: {other:?}"),
         };
-        set_job(weak, cx, phase, committed as u64, total);
+        set_job(app, phase, committed as u64, total);
     }
 
-    set_job(weak, cx, "verifying", 0, total);
+    set_job(app, "verifying", 0, total);
     let mut last_sent = 0u32;
     let mut stalled_polls = 0u32;
     loop {
-        cx.background_executor()
-            .timer(Duration::from_millis(500))
-            .await;
+        app::sleep(Duration::from_millis(500)).await;
         let status = match device::request(log_tx, device::Command::OtaStatus).await {
             Ok(device::Response::OtaStatus(s)) => s,
             Ok(other) => anyhow::bail!("unexpected response to ota_status: {other:?}"),
@@ -288,8 +221,7 @@ async fn run_ota_job_inner(
             Err(e) => return Err(e),
         };
         set_job(
-            weak,
-            cx,
+            app,
             "verifying",
             status.sent as u64,
             status.total.max(1) as u64,
@@ -322,44 +254,11 @@ async fn run_ota_job_inner(
     }
 }
 
-fn set_job(
-    weak: &WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    phase: &'static str,
-    done: u64,
-    total: u64,
-) {
-    weak.update(cx, |this, cx| {
-        if let Some(job) = &mut this.devices_tab.job {
-            job.phase = phase;
-            job.done = done;
-            job.total = total;
-            cx.notify();
-        }
-    })
-    .ok();
-}
-
-async fn prompt_open(cx: &mut AsyncApp) -> anyhow::Result<Option<PathBuf>> {
-    let rx = cx.update(|app| {
-        app.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Select firmware .bin".into()),
-        })
-    })?;
-    let paths = rx
-        .await
-        .map_err(|_| anyhow::anyhow!("file dialog closed unexpectedly"))??;
-    Ok(paths.and_then(|p| p.into_iter().next()))
-}
-
-fn progress_bar(done: u64, total: u64) -> AnyElement {
-    let percent = if total == 0 {
-        0.
-    } else {
-        done as f32 / total as f32 * 100.
-    };
-    Progress::new().value(percent).w_full().into_any_element()
+fn set_job(app: &App, phase: &'static str, done: u64, total: u64) {
+    if let Some(job) = &mut app.devices_tab.borrow_mut().job {
+        job.phase = phase;
+        job.done = done;
+        job.total = total;
+    }
+    app.render_devices();
 }

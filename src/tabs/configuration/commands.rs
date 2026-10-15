@@ -1,105 +1,62 @@
-use gpui::{AnyWindowHandle, AppContext as _, AsyncApp, PathPromptOptions, WeakEntity};
 use std::path::PathBuf;
+use std::rc::Rc;
 
+use crate::app::{self, App, ToastKind};
 use crate::device::{self, Command, Response};
-use crate::root_view::RootView;
-use crate::toast::ToastKind;
 
 use super::Status;
-use super::model::{adc_channels_from_json, can_devices_from_json};
 
-pub(super) async fn refresh(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    window_handle: AnyWindowHandle,
-) {
-    let result = device::request(&log_tx, Command::GetConfig).await;
-    cx.update_window(window_handle, |_, window, cx| {
-        weak.update(cx, |view, cx| {
-            match result {
-                Ok(Response::Config(v)) => {
-                    view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
-                    view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
-                    view.configuration_tab.loaded = true;
-                    view.configuration_tab.status = Status::Idle;
-                }
-                Ok(other) => {
-                    view.configuration_tab.status =
-                        Status::Error(format!("unexpected response: {other:?}"));
-                }
-                Err(e) => view.configuration_tab.status = Status::Error(e.to_string()),
-            }
-            cx.notify();
-        })
-        .ok();
-    })
-    .ok();
-}
-
-pub(super) async fn push_to_device(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    value: serde_json::Value,
-) {
-    let result = device::request(&log_tx, Command::SetConfig { args: value }).await;
-    weak.update(cx, |view, cx| {
-        view.configuration_tab.status = Status::Idle;
+pub(super) async fn refresh(app: &Rc<App>) {
+    let result = device::request(&app.log_tx, Command::GetConfig).await;
+    {
+        let mut tab = app.configuration_tab.borrow_mut();
         match result {
-            Ok(Response::SetConfigOk) => {
-                view.push_toast(cx, "configuration pushed".to_string(), ToastKind::Success);
-            }
-            Ok(other) => view.push_toast(
-                cx,
-                format!("unexpected response: {other:?}"),
-                ToastKind::Error,
-            ),
-            Err(e) => view.push_toast(cx, format!("push failed: {e}"), ToastKind::Error),
+            Ok(Response::Config(v)) => tab.load(&v),
+            Ok(other) => tab.status = Status::Error(format!("unexpected response: {other:?}")),
+            Err(e) => tab.status = Status::Error(e.to_string()),
         }
-    })
-    .ok();
+    }
+    app.render_configuration();
 }
 
-pub(super) async fn load_from_file(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    window_handle: AnyWindowHandle,
-) {
-    let result = load_from_file_inner(cx, &log_tx).await;
-    cx.update_window(window_handle, |_, window, cx| {
-        weak.update(cx, |view, cx| match result {
-            Ok(Some(v)) => {
-                view.configuration_tab.can_devices = can_devices_from_json(&v, window, cx);
-                view.configuration_tab.adc_channels = adc_channels_from_json(&v, window, cx);
-                view.configuration_tab.loaded = true;
-                view.configuration_tab.status = Status::Idle;
-                view.push_toast(cx, "configuration loaded".to_string(), ToastKind::Success);
-            }
-            Ok(None) => {
-                view.configuration_tab.status = Status::Idle; // dialog cancelled
-                cx.notify();
-            }
-            Err(e) => {
-                view.configuration_tab.status = Status::Error(e.to_string());
-                view.push_toast(
-                    cx,
-                    format!("load configuration failed: {e}"),
-                    ToastKind::Error,
-                );
-            }
-        })
-        .ok();
-    })
-    .ok();
+pub(super) async fn push_to_device(app: &Rc<App>, value: serde_json::Value) {
+    let result = device::request(&app.log_tx, Command::SetConfig { args: value }).await;
+    app.configuration_tab.borrow_mut().status = Status::Idle;
+    app.render_configuration();
+    match result {
+        Ok(Response::SetConfigOk) => {
+            app.push_toast("configuration pushed".to_string(), ToastKind::Success);
+        }
+        Ok(other) => app.push_toast(format!("unexpected response: {other:?}"), ToastKind::Error),
+        Err(e) => app.push_toast(format!("push failed: {e}"), ToastKind::Error),
+    }
+}
+
+pub(super) async fn load_from_file(app: &Rc<App>) {
+    let result = load_from_file_inner(&app.log_tx).await;
+    match result {
+        Ok(Some(v)) => {
+            app.configuration_tab.borrow_mut().load(&v);
+            app.render_configuration();
+            app.push_toast("configuration loaded".to_string(), ToastKind::Success);
+        }
+        Ok(None) => {
+            // dialog cancelled
+            app.configuration_tab.borrow_mut().status = Status::Idle;
+            app.render_configuration();
+        }
+        Err(e) => {
+            app.configuration_tab.borrow_mut().status = Status::Error(e.to_string());
+            app.render_configuration();
+            app.push_toast(format!("load configuration failed: {e}"), ToastKind::Error);
+        }
+    }
 }
 
 async fn load_from_file_inner(
-    cx: &mut AsyncApp,
     log_tx: &device::LogRequestTx,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let Some(path) = prompt_open(cx).await? else {
+    let Some(path) = app::pick_file("Load Configuration").await else {
         return Ok(None);
     };
     let text = std::fs::read_to_string(&path)?;
@@ -118,58 +75,24 @@ async fn load_from_file_inner(
     }
 }
 
-async fn prompt_open(cx: &mut AsyncApp) -> anyhow::Result<Option<PathBuf>> {
-    let rx = cx.update(|app| {
-        app.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Load Configuration".into()),
-        })
-    })?;
-    let paths = rx
-        .await
-        .map_err(|_| anyhow::anyhow!("file dialog closed unexpectedly"))??;
-    Ok(paths.and_then(|p| p.into_iter().next()))
-}
-
-pub(super) async fn save_to_file(
-    weak: WeakEntity<RootView>,
-    cx: &mut AsyncApp,
-    log_tx: device::LogRequestTx,
-    window_handle: AnyWindowHandle,
-) {
-    let result = save_to_file_inner(cx, &log_tx).await;
-    cx.update_window(window_handle, |_, window, cx| {
-        weak.update(cx, |view, cx| {
-            view.configuration_tab.status = Status::Idle;
-            match result {
-                Ok(Some((value, path))) => {
-                    view.configuration_tab.can_devices = can_devices_from_json(&value, window, cx);
-                    view.configuration_tab.adc_channels =
-                        adc_channels_from_json(&value, window, cx);
-                    view.configuration_tab.loaded = true;
-                    view.push_toast(
-                        cx,
-                        format!("saved to {}", path.display()),
-                        ToastKind::Success,
-                    );
-                }
-                Ok(None) => cx.notify(), // dialog cancelled
-                Err(e) => view.push_toast(
-                    cx,
-                    format!("save configuration failed: {e}"),
-                    ToastKind::Error,
-                ),
-            }
-        })
-        .ok();
-    })
-    .ok();
+pub(super) async fn save_to_file(app: &Rc<App>) {
+    let result = save_to_file_inner(&app.log_tx).await;
+    app.configuration_tab.borrow_mut().status = Status::Idle;
+    match result {
+        Ok(Some((value, path))) => {
+            app.configuration_tab.borrow_mut().load(&value);
+            app.render_configuration();
+            app.push_toast(format!("saved to {}", path.display()), ToastKind::Success);
+        }
+        Ok(None) => app.render_configuration(), // dialog cancelled
+        Err(e) => {
+            app.render_configuration();
+            app.push_toast(format!("save configuration failed: {e}"), ToastKind::Error);
+        }
+    }
 }
 
 async fn save_to_file_inner(
-    cx: &mut AsyncApp,
     log_tx: &device::LogRequestTx,
 ) -> anyhow::Result<Option<(serde_json::Value, PathBuf)>> {
     let value = match device::request(log_tx, Command::GetConfig).await? {
@@ -179,11 +102,7 @@ async fn save_to_file_inner(
     let pretty = serde_json::to_string_pretty(&value)?;
 
     let dir = std::env::current_dir().unwrap_or_default();
-    let rx = cx.update(|app| app.prompt_for_new_path(&dir, Some("config.json")))?;
-    let Some(dest) = rx
-        .await
-        .map_err(|_| anyhow::anyhow!("save dialog closed unexpectedly"))??
-    else {
+    let Some(dest) = app::save_file(&dir, "config.json").await else {
         return Ok(None);
     };
     std::fs::write(&dest, pretty)?;

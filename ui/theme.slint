@@ -1,0 +1,41 @@
+// Shared palette and metrics. Mirrors the old gpui theme: near-black
+// background, one blue accent, and green/amber/red for status.
+
+import "fonts/JetBrainsMono-Regular.ttf";
+
+export enum Tone { fg, muted, accent, green, amber, red }
+
+export global Theme {
+    out property <color> bg: #0d0d0f;
+    out property <color> panel: #141418;
+    out property <color> titlebar: #16161a;
+    out property <color> border: #26262e;
+    out property <color> fg: #d2d2dc;
+    out property <color> muted: #6b6b7b;
+    out property <color> accent: #6a9fd8;
+    out property <color> green: #50c878;
+    out property <color> amber: #c8a03c;
+    out property <color> red: #c85050;
+
+    out property <color> control: #1e1e24;
+    out property <color> control-hover: #26262e;
+    out property <color> control-active: #2e2e38;
+    out property <color> selection: #6a9fd840;
+
+    out property <string> font-family: "JetBrains Mono";
+    out property <length> font-size: 13px;
+    out property <length> radius: 4px;
+    out property <length> control-height: 24px;
+
+    out property <length> titlebar-height: 32px;
+    out property <length> titlebar-inset: 24px;
+
+    public pure function tone(t: Tone) -> color {
+        if t == Tone.muted { return self.muted; }
+        if t == Tone.accent { return self.accent; }
+        if t == Tone.green { return self.green; }
+        if t == Tone.amber { return self.amber; }
+        if t == Tone.red { return self.red; }
+        return self.fg;
+    }
+}
