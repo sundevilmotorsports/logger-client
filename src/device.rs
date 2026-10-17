@@ -113,6 +113,9 @@ pub struct Resources {
     pub heap_free: u32,
     pub heap_min_free: u32,
     pub cpu_load: [f32; 2],
+    /// CAN bus load percent; `None` on firmware that doesn't report it.
+    #[serde(default)]
+    pub can_load: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

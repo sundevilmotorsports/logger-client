@@ -18,6 +18,14 @@ fn format_kb(bytes: u32) -> String {
     format!("{} KB", bytes / 1024)
 }
 
+fn load_tone(load: f32) -> Tone {
+    match load {
+        l if l >= 90.0 => Tone::Red,
+        l if l >= 70.0 => Tone::Amber,
+        _ => Tone::Green,
+    }
+}
+
 fn resources_spans(resources: Option<&Resources>) -> Vec<Span> {
     let Some(r) = resources else {
         return vec![span("—", Tone::Muted)];
@@ -32,12 +40,10 @@ fn resources_spans(resources: Option<&Resources>) -> Vec<Span> {
         Tone::Fg,
     )];
     for (i, load) in r.cpu_load.iter().enumerate() {
-        let tone = match load {
-            l if *l >= 90.0 => Tone::Red,
-            l if *l >= 70.0 => Tone::Amber,
-            _ => Tone::Green,
-        };
-        spans.push(span(format!("core{i} {load:.0}%"), tone));
+        spans.push(span(format!("core{i} {load:.0}%"), load_tone(*load)));
+    }
+    if let Some(load) = r.can_load {
+        spans.push(span(format!("can {load:.0}%"), load_tone(load)));
     }
     spans
 }
