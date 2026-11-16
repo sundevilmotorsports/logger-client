@@ -300,12 +300,12 @@ pub(crate) fn lookup(name: &str) -> ChannelMeta {
         },
         "a_Long" => ChannelMeta {
             short: "a_Long",
-            units: "g",
+            units: "G",
             convert: |v| (v * 0.122) / 1000.0,
         },
         "a_Vert" => ChannelMeta {
             short: "a_Vert",
-            units: "g",
+            units: "G",
             convert: |v| (v * 0.122) / 1000.0,
         },
         "r_Pitch" => ChannelMeta {
@@ -492,7 +492,7 @@ pub(crate) fn lookup(name: &str) -> ChannelMeta {
         "v_trans_out" => ChannelMeta {
             short: "v_trans_out",
             units: "km/h",
-            convert: |v| 0.1 * v,
+            convert: |v| 0.1 * 13.7 * v,
         },
         "%_APS_main" => ChannelMeta {
             short: "%_APS_main",
@@ -584,24 +584,24 @@ pub(crate) fn lookup(name: &str) -> ChannelMeta {
             units: "kPa",
             convert: identity,
         },
-        "t_MAT" => ChannelMeta {
-            short: "t_MAT",
+        "t_MAT" | "t_IAT" => ChannelMeta {
+            short: "t_IAT",
             units: "C",
-            convert: |v| v - 50.0,
+            convert: |v| v + 69.0,
         },
         "a_Lat_ecu" => ChannelMeta {
             short: "a_Lat_ecu",
-            units: "g",
+            units: "G",
             convert: unwrap_u16_then_milli,
         },
         "a_Long_ecu" => ChannelMeta {
             short: "a_Long_ecu",
-            units: "g",
+            units: "G",
             convert: unwrap_u16_then_milli,
         },
         "a_Vert_ecu" => ChannelMeta {
             short: "a_Vert_ecu",
-            units: "g",
+            units: "G",
             convert: unwrap_u16_then_milli,
         },
         "TESTNO" => ChannelMeta {
